@@ -1,6 +1,6 @@
 ### installer toutes les dependences
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install torch tensorboard torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 pip install gymnasium numpy matplotlib pygame typing_extensions
 

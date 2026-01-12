@@ -25,8 +25,8 @@ class Arm2DEnv(gym.Env):
 
 # action : delta angles
 		self.action_space = spaces.Box(
-			low=np.array([-0.1, -0.1], dtype=np.float32),
-			high=np.array([0.1, 0.1], dtype=np.float32)
+			low=np.array([-1, -1], dtype=np.float32),
+			high=np.array([1, 1], dtype=np.float32)
 		)
 
 # Observation = angles + erreur relative (dx, dy)
@@ -40,7 +40,7 @@ class Arm2DEnv(gym.Env):
 		self.target = np.zeros(2, dtype=np.float32)
 
 		self.step_count = 0
-		self.max_steps = 1000 ###############################
+		self.max_steps = 500 ###############################
 
 		self.render_mode = render_mode
 
@@ -55,9 +55,17 @@ class Arm2DEnv(gym.Env):
 		self.theta2 = self.np_random.uniform(-np.pi, np.pi)
 
 # cible
-		radius = self.np_random.uniform(0, self.max_reach)
+		radius = self.np_random.uniform(0.1, self.max_reach)
 		angle = self.np_random.uniform(-np.pi, np.pi)
 		self.target = np.array([radius*np.cos(angle), radius*np.sin(angle)], dtype=np.float32)
+
+#		self.target = np.abs(np.array([radius*np.cos(angle), radius*np.sin(angle)], dtype=np.float32))
+
+#		self.target = [1, 0.5]
+		
+
+#		self.target = self.np_random.uniform(0.3, 1.4, size=2)
+
 		
 		return self._get_obs(), {}
 
@@ -65,6 +73,7 @@ class Arm2DEnv(gym.Env):
 # --------------------------------------------------------
 	def step(self, action):
 		self.step_count += 1
+		action[:]*=0.1
 
 # Mise à jour des angles
 		self.theta1 = np.clip(self.theta1 + action[0], self.theta_min, self.theta_max)
@@ -87,7 +96,9 @@ class Arm2DEnv(gym.Env):
 
 
 # Succès
-		done = dist < 0.05
+		done = False
+		if dist < 0.05:
+			done = True 
 		truncated = self.step_count >= self.max_steps
 
 		return self._get_obs(), reward, done, truncated, {"effector_pos": eff}

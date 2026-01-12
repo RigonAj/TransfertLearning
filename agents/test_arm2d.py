@@ -34,7 +34,7 @@ def render_arm(env, ax):
 
 # --- Tester plusieurs épisodes ---
 num_tests = 5
-max_steps = 200
+max_steps = 150
 
 for test_ep in range(num_tests):
     # Réinitialiser l'environnement avec positions aléatoires
@@ -47,15 +47,19 @@ for test_ep in range(num_tests):
     for step in range(max_steps):
         # Choisir l'action selon le modèle entraîné
         action, _ = model.predict(obs, deterministic=True)
+        #print(obs)
+        #rint(action)
+        #action[:]=0
         obs, reward, done, truncated, info = env.step(action)
+        #print(reward)
         total_reward += reward
 
         # Affichage en temps réel
         render_arm(env, ax)
 
-        if done:
-            print(f"  - Cible atteinte en {step+1} steps ! Récompense = {total_reward:.2f}")
-            break
+    if done:
+        print(f"  - Cible atteinte ! Récompense = {total_reward:.2f}")
+            
     else:
         print(f"  - Échec après {max_steps} steps. Récompense = {total_reward:.2f}")
 

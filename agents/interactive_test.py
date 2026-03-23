@@ -5,7 +5,7 @@ from envs.arm2dof_env import Arm2DoFEnv
 from stable_baselines3 import PPO
 
 # Charger le modèle entraîné
-model_path = "models/test/ppo_arm2d_final.zip" 
+model_path = "models/ppo_reach_v4/best_model.zip" 
 model = PPO.load(model_path)
 
 # Créer l'environnement

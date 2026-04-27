@@ -32,7 +32,7 @@ class PushBallEnv_2dof(gym.Env):
         # --- Dynamique ---
         self.omega_max = 2.0      # rad/s max
         self.dt        = 0.05     # s / step
-        self.max_steps = 100
+        self.max_steps = 200  
 
         # --- Physique contact ---
         self.eff_radius        = 0.05
@@ -87,7 +87,7 @@ class PushBallEnv_2dof(gym.Env):
         self.dtheta1 = 0.0
         self.dtheta2 = 0.0
 
-        # Cible dans le workspace (couronne 0.4 – 0.9×max_reach)
+        # Cible dans le workspace (couronne 0.4–0.9 × max_reach)
         r_t = float(self.np_random.uniform(0.4 * self.max_reach, 0.9 * self.max_reach))
         a_t = float(self.np_random.uniform(-np.pi, np.pi))
         self.target = np.array([r_t * np.cos(a_t), r_t * np.sin(a_t)])
@@ -114,10 +114,10 @@ class PushBallEnv_2dof(gym.Env):
     def step(self, action):
         self.step_count += 1
         action = np.clip(action, -1.0, 1.0)
-        action_scaled = action * 0.1
+        action_scaled = action * 0.05 
         
         # --- Cinématique : vitesse RÉELLE après clip de butée ---
-        # (nul si joint bloqué)
+        # (nul si joint bloqué → signal clair à la politique)
         new_theta1 = np.clip(
             self.theta1 + float(action[0]) * self.omega_max * self.dt,
             self.theta_min, self.theta_max
@@ -152,7 +152,7 @@ class PushBallEnv_2dof(gym.Env):
         dist_ball_target = float(np.linalg.norm(self.ball - self.target))
         dist_eff_ball = float(np.linalg.norm(self.ball - eff))
 
-        if dist_eff_ball < 0.25 :
+        if dist_eff_ball < 0.2 : 
             dist_eff_ball = 0.1
             
 
@@ -166,23 +166,20 @@ class PushBallEnv_2dof(gym.Env):
             alignment = 0.0
 
         # --- Reward ---
-##        reward_dist = -self.w_dist * dist_ball_target 
         reward_near = -self.w_near * dist_eff_ball
         reward_ctrl = -self.w_ctrl * float(np.sum(np.square(action)))
         
         # REWARD
-##        reward = reward_dist + reward_near + reward_ctrl
         reward = reward_near + reward_ctrl
         
         # Progress ball target
         info_progress_ball_target = self.prev_dist_ball_target - dist_ball_target
         progress_ball_target = self.prev_dist_ball_target - dist_ball_target
-#        reward += progress_ball_target
         if progress_ball_target > 0 :
-            reward += 50 * progress_ball_target 
+            reward += 50 * progress_ball_target
         
         # Alignement
-        reward += 0.2 * alignment
+        reward += 0.4 * alignment 
         
         # Pénalité limites articulaires
         reward -= 0.5 * at_limit
@@ -192,7 +189,7 @@ class PushBallEnv_2dof(gym.Env):
         ball_out = float(np.linalg.norm(self.ball)) > self.max_reach * 1.05
 
         if success:
-            reward += self.bonus_success # x3
+            reward += self.bonus_success
         if ball_out:
             reward -= 5.0
 

@@ -22,38 +22,38 @@ class PushBallEnv_2dof(gym.Env):
     def __init__(self, render_mode=None):
         super().__init__()
 
-        # --- Géométrie bras ---
+        # Géométrie bras 
         self.l1 = 1.0
         self.l2 = 1.0
         self.max_reach = self.l1 + self.l2          # 2.0 m
         self.theta_max = np.pi                       # ±π rad
         self.theta_min = -self.theta_max
 
-        # --- Dynamique ---
+        # Dynamique 
         self.omega_max = 2.0      # rad/s max
         self.dt        = 0.05     # s / step
-        self.max_steps = 100
+        self.max_steps = 200 
 
-        # --- Physique contact ---
+        # Physique contact 
         self.eff_radius        = 0.05
         self.ball_radius       = 0.10
         self.contact_threshold = self.eff_radius + self.ball_radius
 
-        # --- Seuil de succès ---
+        # Seuil de succès 
         self.epsilon = 0.10       # 10 cm
 
-        # --- Poids reward ---
-        self.w_dist  = 1.0
+        # Poids reward 
+        self.w_dist  = 10.0  
         self.w_near  = 0.6
         self.w_ctrl  = 0.1
         self.bonus_success = 30.0
 
-        # --- Espace d'action ---
+        # Espace d'action 
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(2,), dtype=np.float32
         )
 
-        # --- Observation (10D) ---
+        # Observation (10D) 
         r = self.max_reach
         obs_high = np.array([
             self.theta_max, self.theta_max,   # angles
@@ -77,7 +77,7 @@ class PushBallEnv_2dof(gym.Env):
         self.target  = np.zeros(2)
         self.step_count = 0
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.step_count = 0
@@ -87,7 +87,7 @@ class PushBallEnv_2dof(gym.Env):
         self.dtheta1 = 0.0
         self.dtheta2 = 0.0
 
-        # Cible dans le workspace (couronne 0.4 – 0.9×max_reach)
+        # Cible dans le workspace (couronne 0.4–0.9 × max_reach)
         r_t = float(self.np_random.uniform(0.4 * self.max_reach, 0.9 * self.max_reach))
         a_t = float(self.np_random.uniform(-np.pi, np.pi))
         self.target = np.array([r_t * np.cos(a_t), r_t * np.sin(a_t)])
@@ -110,13 +110,13 @@ class PushBallEnv_2dof(gym.Env):
         
         return self._get_obs(), {}
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------
     def step(self, action):
         self.step_count += 1
         action = np.clip(action, -1.0, 1.0)
-        action_scaled = action * 0.1
+        action_scaled = action * 0.05 
         
-        # --- Cinématique : vitesse RÉELLE après clip de butée ---
+        # Cinématique : vitesse RÉELLE après clip de butée 
         # (nul si joint bloqué)
         new_theta1 = np.clip(
             self.theta1 + float(action[0]) * self.omega_max * self.dt,
@@ -141,22 +141,22 @@ class PushBallEnv_2dof(gym.Env):
 
         eff = self.forward_kinematics(self.theta1, self.theta2)
 
-        # --- Contact effecteur → balle ---
+        # Contact effecteur → balle 
         vec_eff_ball = self.ball - eff
         contact_dist = float(np.linalg.norm(vec_eff_ball))
         if contact_dist < self.contact_threshold and contact_dist > 1e-6:
             normal    = vec_eff_ball / contact_dist
             self.ball = self.ball + normal * (self.contact_threshold - contact_dist)
 
-        # --- Distances ---
+        # Distances 
         dist_ball_target = float(np.linalg.norm(self.ball - self.target))
         dist_eff_ball = float(np.linalg.norm(self.ball - eff))
 
-        if dist_eff_ball < 0.25 :
+        if dist_eff_ball < 0.25 : 
             dist_eff_ball = 0.1
             
 
-        # --- Alignement effecteur → balle → cible (info) ---
+        # Alignement effecteur → balle → cible 
         v_eb = self.ball - eff
         v_bt = self.target - self.ball
         if np.linalg.norm(v_eb) > 1e-3 and np.linalg.norm(v_bt) > 1e-3:
@@ -165,24 +165,23 @@ class PushBallEnv_2dof(gym.Env):
         else:
             alignment = 0.0
 
-        # --- Reward ---
-##        reward_dist = -self.w_dist * dist_ball_target 
+        # Reward 
+        reward_dist = -self.w_dist * np.exp(-8 * dist_ball_target)  # dist -> exp(-8*dist) 
         reward_near = -self.w_near * dist_eff_ball
         reward_ctrl = -self.w_ctrl * float(np.sum(np.square(action)))
         
         # REWARD
-##        reward = reward_dist + reward_near + reward_ctrl
-        reward = reward_near + reward_ctrl
+        reward = reward_dist + reward_near + reward_ct
         
         # Progress ball target
         info_progress_ball_target = self.prev_dist_ball_target - dist_ball_target
         progress_ball_target = self.prev_dist_ball_target - dist_ball_target
-#        reward += progress_ball_target
+
         if progress_ball_target > 0 :
             reward += 50 * progress_ball_target 
         
         # Alignement
-        reward += 0.2 * alignment
+        reward += 0.5 * alignment 
         
         # Pénalité limites articulaires
         reward -= 0.5 * at_limit
@@ -212,7 +211,7 @@ class PushBallEnv_2dof(gym.Env):
             "progress_ball_target": info_progress_ball_target,
         }
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------
     def _get_obs(self):
         eff = self.forward_kinematics(self.theta1, self.theta2)
         return np.array([
@@ -223,13 +222,13 @@ class PushBallEnv_2dof(gym.Env):
             self.target[0], self.target[1],
         ], dtype=np.float32)
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------
     def forward_kinematics(self, t1, t2):
         x = self.l1 * np.cos(t1) + self.l2 * np.cos(t1 + t2)
         y = self.l1 * np.sin(t1) + self.l2 * np.sin(t1 + t2)
         return np.array([x, y])
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------
     def render(self):
         if self.render_mode != "human":
             return

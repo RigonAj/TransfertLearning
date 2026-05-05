@@ -1,0 +1,77 @@
+(.venv) jenortier@plt-d2071xh84y2:~/Bureau/transfert_methode_direct$ python3 -m agents.test.transfer_reaching_2to3dof
+[Transfer] loaded reaching 2→3
+  200/1000  success rate 13.0%
+  400/1000  success rate 11.5%
+  600/1000  success rate 14.2%
+  800/1000  success rate 15.6%
+  1000/1000  success rate 15.5%
+======================================================================
+  Taux de réussite : 15.5%
+  Steps moyens : 60.3
+  Dist échec moy : 0.7259 m
+======================================================================
+(.venv) jenortier@plt-d2071xh84y2:~/Bureau/transfert_methode_direct$ python3 -m agents.test.transfer_reaching_3to2dof
+[Transfer] loaded reaching 3→2
+  200/1000  success rate 44.5%
+  400/1000  success rate 46.8%
+  600/1000  success rate 46.8%
+  800/1000  success rate 48.4%
+  1000/1000  success rate 48.6%
+======================================================================
+  Taux de réussite : 48.6%
+  Steps moyens : 57.1
+  Dist échec moy : 0.9323 m
+======================================================================
+(.venv) jenortier@plt-d2071xh84y2:~/Bureau/transfert_methode_direct$ python3 -m agents.test.transfer_pushball_2to3dof
+
+============================================================
+TRANSFER LEARNING TEST: 2-DoF PushBall → 3-DoF Environment
+============================================================
+[Transfer] All components loaded successfully
+  policy_2dof    : ./models/ppo_pushball_2dof_1/best_model.zip
+  vecnorm_2dof   : ./models/ppo_pushball_2dof_1/vec_normalize.pkl
+  state_mapper   : ./data/transfer_learning/state_mapper_2to3dof.pt
+  action_mapper  : ./data/transfer_learning/action_mapper_2to3dof.pt
+
+[2] Running 1000 episodes...
+
+  Progress: 200/1000  (succès partiel: 0.0%)
+  Progress: 400/1000  (succès partiel: 0.0%)
+  Progress: 600/1000  (succès partiel: 0.0%)
+  Progress: 800/1000  (succès partiel: 0.0%)
+  Progress: 1000/1000  (succès partiel: 0.0%)
+
+======================================================================
+RÉSULTATS DU TRANSFERT
+======================================================================
+  Épisodes testés       : 1000
+  Réussites             : 0
+  Taux de réussite      : 0.0%
+  Distance moy (échec)  : 2.5607 m
+======================================================================
+(.venv) jenortier@plt-d2071xh84y2:~/Bureau/transfert_methode_direct$ python3 -m agents.test.transfer_pushball_3to2dof
+
+============================================================
+TRANSFER LEARNING TEST: 3-DoF PushBall → 2-DoF Environment
+============================================================
+[Transfer] All components loaded successfully
+  policy_3dof    : ./models/ppo_pushball_3dof_1/best_model.zip
+  vecnorm_3dof   : ./models/ppo_pushball_3dof_1/vec_normalize.pkl
+  state_mapper   : ./data/transfer_learning/state_mapper_3to2dof.pt
+  action_mapper  : ./data/transfer_learning/action_mapper_3to2dof.pt
+  Progress: 200/1000  (succès partiel: 0.0%)
+  Progress: 400/1000  (succès partiel: 0.0%)
+  Progress: 600/1000  (succès partiel: 0.0%)
+  Progress: 800/1000  (succès partiel: 0.0%)
+  Progress: 1000/1000  (succès partiel: 0.0%)
+
+======================================================================
+RÉSULTATS DU TRANSFERT
+======================================================================
+  Épisodes testés       : 1000
+  Réussites             : 0
+  Taux de réussite      : 0.0%
+  Distance moy (échec)  : 2.4973 m
+======================================================================
+(.venv) jenortier@plt-d2071xh84y2:~/Bureau/transfert_methode_direct$ 
+

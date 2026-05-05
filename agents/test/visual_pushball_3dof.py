@@ -1,0 +1,59 @@
+import time
+import numpy as np
+import matplotlib
+matplotlib.use("TkAgg") 
+import matplotlib.pyplot as plt
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.monitor import Monitor
+from envs.env_pushball_3dof import PushBallEnv_3dof 
+
+run_id = 1
+MODEL_PATH   = f"models/ppo_pushball_3dof_{run_id}/best_model.zip"
+VECNORM_PATH = f"models/ppo_pushball_3dof_{run_id}/vec_normalize.pkl"
+
+num_tests = 5
+max_steps = 150
+
+# --- Charger modèle + VecNormalize (indispensable) ---
+
+def make_env():
+    return Monitor(PushBallEnv_3dof(render_mode="human"))
+
+env = DummyVecEnv([make_env])
+env = VecNormalize.load(VECNORM_PATH, env)
+env.training   = False
+env.norm_reward = False
+
+#model = PPO.load(MODEL_PATH)
+model = PPO.load(MODEL_PATH, env=env)
+
+# --- Accès à l'env interne pour render() et infos ---
+inner_env = env.envs[0].unwrapped
+
+for test_ep in range(num_tests):
+    obs = env.reset()
+    total_reward = 0.0
+    print(f"\nTest épisode {test_ep+1} : \n > cible = {inner_env.target} \n > balle = {inner_env.ball}")
+
+    for step in range(max_steps):
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, dones, infos = env.step(action)
+        total_reward += float(reward[0])
+
+        inner_env.render()
+        time.sleep(0.001)
+
+        if dones[0]:
+            break
+
+    print(f"\n Total reward: {total_reward:.2f} \n")
+    
+    info = infos[0]
+    
+    if info.get("target_reached", False):
+        print(f"  ✓ Cible atteinte en {step+1} steps ! Récompense = {total_reward:.2f}")
+    else:
+        print(f"  ✗ Échec après {step+1} steps. Dist finale = {info.get('dist_ball_target', '?'):.4f} m")
+
+env.close()

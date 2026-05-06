@@ -22,7 +22,7 @@ if __name__ == "__main__":
     # ==============================
     total_batch = 16384
     n_envs = 64
-    TOTAL_TIMESTEPS = 15_000_000
+    TOTAL_TIMESTEPS = 50_000_000
 
     # ==============================
     # Directories

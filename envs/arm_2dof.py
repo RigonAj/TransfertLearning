@@ -102,8 +102,8 @@ class Arm2DoF(gym.Env):
         plt.plot([j2[0], eff[0]], [j2[1], eff[1]], 'b-', lw=4, label='Link 2')
         plt.gca().add_patch(plt.Circle(eff, self.eff_radius * 2,
                                        color='red', alpha=0.6))
-        plt.xlim(-2.5, 2.5)
-        plt.ylim(-2.5, 2.5)
+        plt.xlim(-3.2, 3.2)
+        plt.ylim(-3.2, 3.2)
         plt.gca().set_aspect("equal")
         plt.title(f"Step {self.step_count}")
         plt.legend(loc="upper right", fontsize=8)

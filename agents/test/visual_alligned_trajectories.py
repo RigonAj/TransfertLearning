@@ -154,8 +154,7 @@ def main():
         traj_data = pickle.load(f)
     meta = traj_data['metadata']
     n_pairs = meta['n_pairs']
-#    pair_idx = args.pair % n_pairs
-    pair_idx = 2
+    pair_idx = args.pair % n_pairs
     targets  = traj_data['targets'][pair_idx]
     n_targets = len(targets)
     steps_per_target = args.steps_per_target or meta.get('steps_per_target', 20)

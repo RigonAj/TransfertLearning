@@ -160,7 +160,7 @@ class ActionMapperTrainer:
 
     def train(self, trajectories: Dict, epochs: int = 300, batch_size: int = 512):
         print("\nTraining Action Mapper (arm_obs_2dof + action_3dof → action_2dof)")
-        print(f"  Input : {ARM_OBS_2dof + 2}D   Output : 3D")
+        print(f"  Input : {ARM_OBS_2dof + 3}D   Output : 2D")
 
         s2 = torch.tensor(
             np.concatenate(trajectories['states_2dof'],  axis=0), dtype=torch.float32
@@ -229,7 +229,7 @@ class ActionMapperTrainer:
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    epochs = 1
+    epochs = 250
 
     data_dir           = Path("./data/transfer_learning")
     traj_path          = data_dir / "trajectories.pkl"

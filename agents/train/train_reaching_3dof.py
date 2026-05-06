@@ -25,6 +25,17 @@ n_envs = 64
 TOTAL_TIMESTEPS = 8_000_000 
 
 # ==============================
+# Directories
+# ==============================
+run_id = 1
+run_name = f"ppo_reach_3dof_{run_id}"
+tensorboard_log_dir = f"./logs/{run_name}/"
+model_dir = f"./models/{run_name}/"
+
+os.makedirs(model_dir, exist_ok=True)
+os.makedirs(tensorboard_log_dir, exist_ok=True)
+
+# ==============================
 # Schedules
 # ==============================
 def linear_schedule(initial_value):
@@ -60,16 +71,6 @@ class SyncedEvalCallback(EvalCallback):
             self.training_env.save(vec_path)
 
         return result
-
-# ==============================
-# Directories
-# ==============================
-run_name = "ppo_reach_3dof_multi"
-tensorboard_log_dir = f"./logs/{run_name}/"
-model_dir = f"./models/{run_name}/"
-
-os.makedirs(model_dir, exist_ok=True)
-os.makedirs(tensorboard_log_dir, exist_ok=True)
 
 # ==============================
 # ENV FACTORY (IMPORTANT)
@@ -138,6 +139,7 @@ if multiprocessing.current_process().name == "MainProcess":
     # ==============================
     # PPO params
     # ==============================
+
     n_steps = total_batch // n_envs
     batch_size = 512
 

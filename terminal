@@ -31,7 +31,7 @@ python3 -m agents.test.visual_reaching_3dof
 python3 -m agents.test.visual_pushball_2dof
 python3 -m agents.test.visual_pushball_3dof
 
-python3 -m agents.test.visual_alligned_trajectories
+python3 -m agents.test.visual_alligned_trajectories --pair 2
 
 python3 -m agents.test.transfer_reaching_2to3dof
 python3 -m agents.test.transfer_reaching_3to2dof

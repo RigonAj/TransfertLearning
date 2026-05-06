@@ -1,22 +1,40 @@
 if __name__ == "__main__":
-    """
-    Entraînement PPO — PushBallEnv_3dof
-    """
     import os
     import numpy as np
     import torch
     import multiprocessing
 
-    torch.set_num_threads(4)
     from torch import nn
     from stable_baselines3 import PPO
-    from stable_baselines3.common.callbacks import BaseCallback
-    from stable_baselines3.common.callbacks import EvalCallback
+    from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
     from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, SubprocVecEnv
+
     from envs.env_pushball_3dof import PushBallEnv_3dof
     
-    
+    # ==============================
+    # CPU / Threads
+    # ==============================
+    torch.set_num_threads(16)
+
+    # ==============================
+    # Hyperparamètres
+    # ==============================
+    total_batch = 16384
+    n_envs = 64
+    TOTAL_TIMESTEPS = 50_000_000
+
+    # ==============================
+    # Directories
+    # ==============================
+    run_id = 1
+    run_name = f"ppo_pushball_3dof_{run_id}"
+    tensorboard_log_dir = f"./logs/{run_name}/"
+    model_dir = f"./models/{run_name}/"
+
+    # ==============================
+    # Schedules
+    # ==============================
     def linear_schedule(initial_value):
         def func(progress_remaining):
             return progress_remaining * initial_value
@@ -66,20 +84,6 @@ if __name__ == "__main__":
                 if p_bt:
                     self.logger.record("custom/progress_ball_target", np.mean(p_bt))
             return True
-
-    # ==============================
-    # Hyperparamètres
-    # ==============================
-    n_envs = 16
-    TOTAL_TIMESTEPS = 15_000_000 
-
-    # ==============================
-    # Directories
-    # ==============================
-    run_id = 1
-    run_name = f"ppo_pushball_3dof_{run_id}"
-    tensorboard_log_dir = f"./logs/{run_name}/"
-    model_dir = f"./models/{run_name}/"
 
     # ==============================
     # Environment factory
@@ -150,10 +154,16 @@ if __name__ == "__main__":
         # ==============================
         # PPO
         # ==============================
+
+        n_steps = total_batch // n_envs
+        batch_size = 512
+
+        assert (n_steps * n_envs) % batch_size == 0
+
         model = PPO(
             "MlpPolicy",
             train_env,
-            n_steps=1024, 	## // n_envs,
+            n_steps=n_steps,
             batch_size=128,
             n_epochs=5,
             learning_rate=linear_schedule(1e-4), ## v2: 1e-4

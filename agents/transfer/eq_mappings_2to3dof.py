@@ -229,7 +229,7 @@ class ActionMapperTrainer:
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    epochs = 1
+    epochs = 250
 
     data_dir           = Path("./data/transfer_learning")
     traj_path          = data_dir / "trajectories.pkl"

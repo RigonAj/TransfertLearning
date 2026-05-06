@@ -3,7 +3,7 @@ stable-baselines3[extra]
 torch
 numpy
 matplotlib
-pyqt5
+PyQt5
 
 tensorboard
 tqdm

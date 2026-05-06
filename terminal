@@ -12,8 +12,8 @@ pip install -r requirements.txt
 python3 -m agents.train.train_reaching_2dof
 python3 -m agents.train.train_reaching_3dof
 
-python3 -m agents.train.train_pushball_2dof_m-env
-python3 -m agents.train.train_pushball_3dof_m-env
+python3 -m agents.train.train_pushball_2dof
+python3 -m agents.train.train_pushball_3dof
 
 python3 -m agents.transfer.eq_trajectories
 python3 -m agents.transfer.eq_mappings_3to2dof

@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import matplotlib
-matplotlib.use("TkAgg") 
+matplotlib.use("QtAgg")
 import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -41,11 +41,12 @@ for test_ep in range(num_tests):
         obs, reward, dones, infos = env.step(action)
         total_reward += float(reward[0])
 
+        if dones[0]:
+            break
+
         inner_env.render()
         time.sleep(0.001)
 
-        if dones[0]:
-            break
 
     print(f"\n Total reward: {total_reward:.2f} \n")
     

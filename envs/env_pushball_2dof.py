@@ -25,16 +25,16 @@ class PushBallEnv_2dof(Arm2DoF):
         # Poids des récompenses
         self.w_near        = 0.6
         self.w_ctrl        = 0.1
-        self.bonus_success = 30.0
+        self.bonus_success = 100.0 	## 30.0->100.0
 
         # Observation 10D = 6D bras (hérité) + 4D tâche
         # Indices tâche (arm_obs_size + i) :
-        #   0  ball_x / max_reach    [-1.1, 1.1]  (balle peut sortir légèrement)
-        #   1  ball_y / max_reach    [-1.1, 1.1]
-        #   2  tgt_x  / max_reach    [-1,   1  ]
-        #   3  tgt_y  / max_reach    [-1,   1  ]
+        #   0  ball_x / max_reach    [-1, 1]  (clippé)
+        #   1  ball_y / max_reach    [-1, 1]  (clippé)
+        #   2  tgt_x  / max_reach    [-1, 1]
+        #   3  tgt_y  / max_reach    [-1, 1]
         arm_high  = np.ones(self.arm_obs_size, dtype=np.float32)
-        task_high = np.array([1.1, 1.1, 1.0, 1.0], dtype=np.float32)
+        task_high = np.ones(4, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=np.concatenate([-arm_high, -task_high]),
             high=np.concatenate([ arm_high,  task_high]),
@@ -129,8 +129,8 @@ class PushBallEnv_2dof(Arm2DoF):
         reward = reward_near + reward_ctrl
 
         progress_ball_target = self.prev_dist_ball_target - dist_ball_target
-        if progress_ball_target > 0:
-            reward += 50.0 * progress_ball_target
+##            if progress_ball_target > 0:
+        reward += 30.0 * progress_ball_target 	## 50.0->30.0
 
         reward += 0.2 * alignment
         reward -= 0.5 * at_limit
@@ -167,15 +167,15 @@ class PushBallEnv_2dof(Arm2DoF):
         [6:10] Observation tâche push-ball :
         Index  Grandeur         Normalisation    Plage
         ───────────────────────────────────────────────
-          6    ball_x           / max_reach      [-1.1, 1.1]
-          7    ball_y           / max_reach      [-1.1, 1.1]
+          6    ball_x           / max_reach      [-1,   1  ]
+          7    ball_y           / max_reach      [-1,   1  ]
           8    tgt_x            / max_reach      [-1,   1  ]
           9    tgt_y            / max_reach      [-1,   1  ]
         """
         arm_obs  = super()._get_obs()
         task_obs = np.array([
-            self.ball[0]   / self.max_reach,
-            self.ball[1]   / self.max_reach,
+            np.clip(self.ball[0]   / self.max_reach, -1., 1.),
+            np.clip(self.ball[1]   / self.max_reach, -1., 1.),
             self.target[0] / self.max_reach,
             self.target[1] / self.max_reach,
         ], dtype=np.float32)

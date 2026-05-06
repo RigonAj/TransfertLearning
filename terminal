@@ -1,10 +1,12 @@
+
 sudo apt install python3.10-venv
-sudo apt install python3-tk
+
 
 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
 
 
 python3 -m agents.train.train_reaching_2dof
@@ -16,6 +18,7 @@ python3 -m agents.train.train_pushball_3dof_m-env
 python3 -m agents.transfer.eq_trajectories
 python3 -m agents.transfer.eq_mappings_3to2dof
 python3 -m agents.transfer.eq_mappings_2to3dof
+
 
 
 python3 -m agents.test.infos_reaching_2dof

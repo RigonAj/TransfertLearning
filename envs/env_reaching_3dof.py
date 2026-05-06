@@ -33,8 +33,8 @@ class ReachingEnv_3dof(Arm3DoF):
         #   3  tgt_y/r     cible y                  [-1, 1]
         #   4  dist/r      distance absolue          [0, 2]
         arm_high  = np.ones(self.arm_obs_size, dtype=np.float32)
-        task_low  = np.array([-2., -2., -1., -1.,  0.], dtype=np.float32)
-        task_high = np.array([ 2.,  2.,  1.,  1.,  2.], dtype=np.float32)
+        task_low  = np.array([-1., -1., -1., -1.,  0.], dtype=np.float32)
+        task_high = np.array([ 1.,  1.,  1.,  1.,  1.], dtype=np.float32)
         self.observation_space = spaces.Box(
             low=np.concatenate([-arm_high, task_low]),
             high=np.concatenate([ arm_high, task_high]),
@@ -47,7 +47,7 @@ class ReachingEnv_3dof(Arm3DoF):
     # ------------------------------------------------------------------
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
-        radius = self.np_random.uniform(0.1, self.max_reach)
+        radius = self.np_random.uniform(0.15, self.max_reach)
         angle  = self.np_random.uniform(-np.pi, np.pi)
         self.target = np.array([radius * np.cos(angle),
                                 radius * np.sin(angle)], dtype=np.float32)
@@ -60,7 +60,7 @@ class ReachingEnv_3dof(Arm3DoF):
     def step(self, action):
         self.step_count += 1
 
-        delta  = np.clip(action, -1.0, 1.0) * self.delta_max
+        delta  = np.clip(action, -1.0, 1.0) * self.delta_max		# DELTA_MAX   = 0.1
         new_t1 = np.clip(self.theta1 + delta[0], self.theta_min, self.theta_max)
         new_t2 = np.clip(self.theta2 + delta[1], self.theta_min, self.theta_max)
         new_t3 = np.clip(self.theta3 + delta[2], self.theta_min, self.theta_max)
@@ -82,14 +82,13 @@ class ReachingEnv_3dof(Arm3DoF):
         dist = float(np.linalg.norm(eff - self.target))
 
         progress = self.prev_dist - dist
-        reward  = self.alpha * progress / self.max_reach
-        reward -= self.lambda_ctrl * float(np.dot(action, action))
+        reward  = self.alpha * progress / self.max_reach		# ALPHA       = 10.0
+        reward -= self.lambda_ctrl * float(np.dot(action, action))	# LAMBDA_CTRL = 0.05
         reward -= 0.02 * at_limit
-        reward -= 0.1 * np.tanh(dist)
 
-        success = dist < self.epsilon
+        success = dist < self.epsilon					# EPSILON     = 0.05
         if success:
-            reward += self.r_success
+            reward += self.r_success					# R_SUCCESS   = 5.0
 
         self.prev_dist = dist
         terminated = success
@@ -108,24 +107,25 @@ class ReachingEnv_3dof(Arm3DoF):
                → voir Arm3DoF._get_obs() pour le détail
 
         [8:13] Observation tâche reaching :
-        Index  Grandeur         Normalisation    Plage
-        ───────────────────────────────────────────────
-          8    dx (tgt-eff x)   / max_reach      [-2, 2]
-          9    dy (tgt-eff y)   / max_reach      [-2, 2]
-         10    tgt_x            / max_reach      [-1, 1]
-         11    tgt_y            / max_reach      [-1, 1]
-         12    dist eff-tgt     / max_reach      [ 0, 2]
+        Index  Grandeur         Normalisation      Plage
+        ─────────────────────────────────────────────────
+          8    dx (tgt-eff x)   / (2·max_reach)   [-1, 1]
+          9    dy (tgt-eff y)   / (2·max_reach)   [-1, 1]
+         10    tgt_x            / max_reach        [-1, 1]
+         11    tgt_y            / max_reach        [-1, 1]
+         12    dist eff-tgt     / (2·max_reach)   [ 0, 1]
         """
         arm_obs = super()._get_obs()
         eff     = self.forward_kinematics(self.theta1, self.theta2, self.theta3)
         dx, dy  = self.target - eff
         dist    = float(np.linalg.norm(eff - self.target))
+        norm2   = 2.0 * self.max_reach
         task_obs = np.array([
-            dx / self.max_reach,
-            dy / self.max_reach,
+            np.clip(dx / norm2, -1., 1.),
+            np.clip(dy / norm2, -1., 1.),
             self.target[0] / self.max_reach,
             self.target[1] / self.max_reach,
-            dist / self.max_reach,
+            dist / norm2,
         ], dtype=np.float32)
         return np.concatenate([arm_obs, task_obs])
 

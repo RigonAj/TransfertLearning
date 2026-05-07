@@ -1,0 +1,71 @@
+## SETUP ##
+
+sudo apt install python3.10-venv
+
+# setup venv
+python3 -m venv .venv
+source .venv/bin/activate       # source before running
+pip install -r requirements.txt
+
+
+
+## TRAINING ##
+
+# train agents
+python3 -m agents.train.train_reaching_2dof
+python3 -m agents.train.train_reaching_3dof
+python3 -m agents.train.train_pushball_2dof
+python3 -m agents.train.train_pushball_3dof
+
+# train mappers
+python3 -m agents.transfer.trajectories
+python3 -m agents.transfer.mappings_3to2dof
+python3 -m agents.transfer.mappings_2to3dof
+
+
+
+## TASKS ##
+
+# get tasks' infos
+python3 -m agents.test.reaching_2dof
+python3 -m agents.test.reaching_3dof
+python3 -m agents.test.pushball_2dof
+python3 -m agents.test.pushball_3dof
+
+# record runs
+python3 -m agents.record.runs_reach_2dof
+python3 -m agents.record.runs_reach_3dof
+python3 -m agents.record.runs_pushball_2dof
+python3 -m agents.record.runs_pushball_3dof
+
+# replay runs, args: --success or --fail,  --ep 3, --delay 0.02
+python3 -m agents.visualize.replay_reach_2dof
+python3 -m agents.visualize.replay_reach_3dof
+python3 -m agents.visualize.replay_pushball_2dof
+python3 -m agents.visualize.replay_pushball_3dof
+
+
+
+## TRANSFER ##
+
+# visualize trajectories, arg: --pair 2
+python3 -m agents.vizualize.show_alligned_trajectories
+
+# get transfered tasks' infos
+python3 -m agents.test.transfer_reaching_2to3dof
+python3 -m agents.test.transfer_reaching_3to2dof
+python3 -m agents.test.transfer_pushball_2to3dof
+python3 -m agents.test.transfer_pushball_3to2dof
+
+# record runs
+python3 -m agents.record.runs_transfer_reach_2to3dof
+python3 -m agents.record.runs_transfer_reach_3to2dof
+python3 -m agents.record.runs_transfer_pushball_2to3dof
+python3 -m agents.record.runs_transfer_pushball_3to2dof
+
+# replay runs, args: --success or --fail,  --ep 3, --delay 0.02
+python3 -m agents.visualize.replay_transfer_reach_2to3dof
+python3 -m agents.visualize.replay_transfer_reach_3to2dof
+python3 -m agents.visualize.replay_transfer_pushball_2to3dof
+python3 -m agents.visualize.replay_transfer_pushball_3to2dof
+

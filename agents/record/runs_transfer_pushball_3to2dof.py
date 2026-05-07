@@ -41,7 +41,7 @@ policy = TransferPolicy(
 )
 
 def make_env():
-    return Monitor(PushBallEnv_2dof(render_mode=None))
+    return Monitor(PushBallEnv_2dof(render_mode=None, max_steps=MAX_STEPS))
 
 env   = DummyVecEnv([make_env])
 inner = env.envs[0].unwrapped

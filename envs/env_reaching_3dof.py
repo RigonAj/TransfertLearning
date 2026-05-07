@@ -15,7 +15,7 @@ class ReachingEnv_3dof(Arm3DoF):
     def __init__(self, render_mode=None,
                  alpha=ALPHA, lambda_ctrl=LAMBDA_CTRL,
                  r_success=R_SUCCESS, epsilon=EPSILON,
-                 delta_max=DELTA_MAX):
+                 delta_max=DELTA_MAX, max_steps=200):
         super().__init__(render_mode=render_mode)
 
         self.alpha       = alpha
@@ -23,7 +23,7 @@ class ReachingEnv_3dof(Arm3DoF):
         self.r_success   = r_success
         self.epsilon     = epsilon
         self.delta_max   = delta_max
-        self.max_steps   = 200
+        self.max_steps   = max_steps
 
         # Observation 13D = 8D bras (hérité) + 5D tâche
         # Indices tâche (arm_obs_size + i) :

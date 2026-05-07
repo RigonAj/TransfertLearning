@@ -18,7 +18,7 @@ RUN_ID       = 1
 MODEL_PATH   = f"models/ppo_reach_2dof_{RUN_ID}/best_model.zip"
 VECNORM_PATH = f"models/ppo_reach_2dof_{RUN_ID}/vec_normalize.pkl"
 MAX_STEPS    = 100
-N_TARGET     = 20   # nombre d'épisodes à collecter par catégorie
+N_TARGET     = 20
 
 SAVE_SUCCESS = "runs/reach_2dof/success"
 SAVE_FAIL    = "runs/reach_2dof/fail"
@@ -29,7 +29,7 @@ os.makedirs(SAVE_FAIL,    exist_ok=True)
 model = PPO.load(MODEL_PATH)
 
 def make_env():
-    return Monitor(ReachingEnv_2dof(render_mode=None))
+    return Monitor(ReachingEnv_2dof(render_mode=None, max_steps=MAX_STEPS))
 
 env = DummyVecEnv([make_env])
 env = VecNormalize.load(VECNORM_PATH, env)

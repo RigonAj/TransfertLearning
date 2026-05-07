@@ -41,7 +41,7 @@ policy = TransferPolicy(
 )
 
 def make_env():
-    return Monitor(ReachingEnv_3dof(render_mode=None))
+    return Monitor(ReachingEnv_3dof(render_mode=None, max_steps=MAX_STEPS))
 
 env   = DummyVecEnv([make_env])
 inner = env.envs[0].unwrapped   # accès direct à l'état

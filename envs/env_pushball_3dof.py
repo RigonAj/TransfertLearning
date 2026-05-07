@@ -6,13 +6,13 @@ from envs.arm_3dof import Arm3DoF
 
 
 class PushBallEnv_3dof(Arm3DoF):
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, max_steps=200):
         super().__init__(render_mode=render_mode)
 
         # Dynamique
         self.omega_max = 2.0
         self.dt        = 0.05
-        self.max_steps = 100
+        self.max_steps = max_steps
 
         # Contact
         self.eff_radius        = 0.05

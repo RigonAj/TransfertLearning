@@ -6,13 +6,13 @@ from envs.arm_2dof import Arm2DoF
 
 
 class PushBallEnv_2dof(Arm2DoF):
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, max_steps=200):
         super().__init__(render_mode=render_mode)
 
         # Dynamique spécifique (commande en vitesse)
         self.omega_max = 2.0
         self.dt        = 0.05
-        self.max_steps = 100
+        self.max_steps = max_steps
 
         # Physique du contact
         self.eff_radius        = 0.05

@@ -29,7 +29,7 @@ os.makedirs(SAVE_FAIL,    exist_ok=True)
 model = PPO.load(MODEL_PATH)
 
 def make_env():
-    return Monitor(PushBallEnv_3dof(render_mode=None))
+    return Monitor(PushBallEnv_3dof(render_mode=None, max_steps=MAX_STEPS))
 
 env = DummyVecEnv([make_env])
 env = VecNormalize.load(VECNORM_PATH, env)

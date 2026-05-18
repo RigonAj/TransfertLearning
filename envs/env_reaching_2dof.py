@@ -94,6 +94,8 @@ class ReachingEnv_2dof(Arm2DoF):
         return self._get_obs(), reward, terminated, truncated, {
             "target_reached": success,
             "dist": dist,
+            "theta1": self.theta1,
+            "theta2": self.theta2,
         }
 
     # ------------------------------------------------------------------

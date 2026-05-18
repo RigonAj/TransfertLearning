@@ -6,7 +6,7 @@ from envs.arm_2dof import Arm2DoF
 
 
 class PushBallEnv_2dof(Arm2DoF):
-    def __init__(self, render_mode=None, max_steps=200):
+    def __init__(self, render_mode=None, max_steps = 100):
         super().__init__(render_mode=render_mode)
 
         # Dynamique spécifique (commande en vitesse)
@@ -24,8 +24,8 @@ class PushBallEnv_2dof(Arm2DoF):
 
         # Poids des récompenses
         self.w_near        = 0.6
-        self.w_ctrl        = 0.1
-        self.bonus_success = 100.0 	## 30.0->100.0
+        self.w_ctrl        = 0.03
+        self.bonus_success = 400.0 	## 30.0->100.0
 
         # Observation 10D = 6D bras (hérité) + 4D tâche
         # Indices tâche (arm_obs_size + i) :
@@ -52,13 +52,13 @@ class PushBallEnv_2dof(Arm2DoF):
         super().reset(seed=seed, options=options)   # angles aléatoires, step_count=0
 
         # Cible
-        r_t = float(self.np_random.uniform(0.4 * self.max_reach, 0.9 * self.max_reach))
+        r_t = float(self.np_random.uniform(0.4 * self.max_reach, 0.75 * self.max_reach))
         a_t = float(self.np_random.uniform(-np.pi, np.pi))
         self.target = np.array([r_t * np.cos(a_t), r_t * np.sin(a_t)])
 
         # Balle à au moins 0.3 m de la cible
         for _ in range(1000):
-            r_b = float(self.np_random.uniform(0.3 * self.max_reach, 0.9 * self.max_reach))
+            r_b = float(self.np_random.uniform(0.3 * self.max_reach, 0.75 * self.max_reach))
             a_b = float(self.np_random.uniform(-np.pi, np.pi))
             candidate = np.array([r_b * np.cos(a_b), r_b * np.sin(a_b)])
             if np.linalg.norm(candidate - self.target) >= 0.3:
@@ -130,9 +130,10 @@ class PushBallEnv_2dof(Arm2DoF):
 
         progress_ball_target = self.prev_dist_ball_target - dist_ball_target
 ##            if progress_ball_target > 0:
-        reward += 30.0 * progress_ball_target 	## 50.0->30.0
+        ##penalty_neg_progress = 2.5 if progress_ball_target < 0.0 else 1.0
+        reward += 30.0 *  progress_ball_target 	## 50.0->30.0
 
-        reward += 0.2 * alignment
+        reward += 0.6 * alignment
         reward -= 0.5 * at_limit
 
         success  = dist_ball_target < self.epsilon
@@ -155,6 +156,9 @@ class PushBallEnv_2dof(Arm2DoF):
             "dist_eff_ball":        dist_eff_ball,
             "alignment":            alignment,
             "progress_ball_target": progress_ball_target,
+            "theta1": self.theta1,
+            "theta2": self.theta2,
+            "ball":   self.ball.copy(),
         }
 
     # ------------------------------------------------------------------

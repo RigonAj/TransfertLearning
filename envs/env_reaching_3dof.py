@@ -97,6 +97,9 @@ class ReachingEnv_3dof(Arm3DoF):
         return self._get_obs(), reward, terminated, truncated, {
             "target_reached": success,
             "dist": dist,
+            "theta1": self.theta1,
+            "theta2": self.theta2,
+            "theta3": self.theta3,
         }
 
     # ------------------------------------------------------------------

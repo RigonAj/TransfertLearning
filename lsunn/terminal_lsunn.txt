@@ -1,0 +1,37 @@
+# activate venv
+source .venv/bin/activate
+
+
+
+## LOGS ##
+
+#tensorboard
+tensorboard --logdir data #.LSUNN
+
+
+
+## TRAINING ##
+
+# generate paired trajectories for pushBall
+python3 -m lsunn.train.trajectories_pushball
+
+# train
+python3 -m lsunn.train.train_bases
+python3 -m lsunn.train.train_unn_pushball_2dof
+python3 -m lsunn.train.train_unn_pushball_3dof
+python3 -m lsunn.train.train_action_mappers
+
+
+
+## TESTS ##
+
+# test transfer
+python3 -m lsunn.test.transfer_pushball_2to3dof
+python3 -m lsunn.test.transfer_pushball_3to2dof
+
+# record
+
+
+# visualise transfer
+
+

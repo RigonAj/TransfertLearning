@@ -11,7 +11,7 @@ from typing import Dict
 
 from agents.transfer.mapper_models import StateMapperMLP, ActionMapperMLP
 
-torch.set_num_threads(1)
+torch.set_num_threads(4)
 
 
 def ee_from_state(state: np.ndarray, dof: int) -> np.ndarray:

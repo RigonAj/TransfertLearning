@@ -11,12 +11,13 @@ from stable_baselines3.common.monitor import Monitor
 
 from envs.env_continuous_reaching_2dof import Arm2DoFPersistentEnv
 from envs.env_continuous_reaching_3dof import Arm3DoFPersistentEnv
+from agents.transfer.utils import spatial_sampling   # <-- notre fonction SS
 
 import torch
 torch.set_num_threads(4)
 
 # =========================================================
-# Helpers
+# Helpers (inchangés, mais je les laisse pour être complet)
 # =========================================================
 
 def load_policy_and_vecnorm(model_path, vec_path, env_factory, device="cpu"):
@@ -58,7 +59,7 @@ def generate_random_target(rng, max_reach, scale=0.98):
     angle = rng.uniform(-np.pi, np.pi)
     return np.array([r * np.cos(angle), r * np.sin(angle)], dtype=np.float32)
 
-def generate_target_sequence(rng, length, max_reach, scale=0.7):
+def generate_target_sequence(rng, length, max_reach, scale=0.98):
     return [generate_random_target(rng, max_reach, scale) for _ in range(length)]
 
 def both_close_to_target(env2, env3, target, tol=0.2):
@@ -155,19 +156,20 @@ def record_one_segment(env2, env3, start_target, end_target,
     return states2, states3, ee2, ee3, actions2, actions3, success, info
 
 # =========================================================
-# Génération principale – avec sauvegarde des actions
+# Génération principale – AVEC SPATIAL SAMPLING
 # =========================================================
 def main():
-    N_SEGMENTS_TARGET = 500
+    NUM_SAMPLES = 50                     # <-- longueur fixe après SS
+    N_SEGMENTS_TARGET = 10_000
     TARGETS_PER_EPISODE = 30
     MAX_STEPS_PER_SEGMENT = 60
     TOLERANCE = 0.2
     WAIT_MAX_STEPS = 500
-    TARGET_SCALE = 0.7
+    TARGET_SCALE = 0.98
 
     data_dir = Path("./data/DIRECT")
     data_dir.mkdir(parents=True, exist_ok=True)
-    traj_path = data_dir / "trajectories_aligned.pkl"
+    traj_path = data_dir / "trajectories_aligned_ss.pkl"   # nouveau nom
 
     run_id_2dof = 1
     run_id_3dof = 1
@@ -188,15 +190,17 @@ def main():
     max_reach = min(Arm2DoFPersistentEnv().max_reach, Arm3DoFPersistentEnv().max_reach)
     rng = np.random.RandomState(42)
 
-    all_s2 = []
-    all_s3 = []
-    all_a2 = []
-    all_a3 = []
+    # On va stocker des listes de segments (chacun déjà ré‑échantillonné)
+    all_segments_s2 = []   # chaque élément: array (NUM_SAMPLES, dim2)
+    all_segments_s3 = []   # (NUM_SAMPLES, dim3)
+    all_segments_a2 = []   # (NUM_SAMPLES, 2)
+    all_segments_a3 = []   # (NUM_SAMPLES, 3)
+
     valid_segments = 0
     start_time = time.time()
     episode = 0
 
-    pbar = tqdm(total=N_SEGMENTS_TARGET, desc="Valid segments", unit="seg")
+    pbar = tqdm(total=N_SEGMENTS_TARGET, desc="Valid segments (SS)", unit="seg")
 
     while valid_segments < N_SEGMENTS_TARGET:
         episode += 1
@@ -209,7 +213,6 @@ def main():
         env2.reset(seed=episode)
         env3.reset(seed=episode)
 
-        # Forcer angles à 0
         env2.theta1 = 0.0; env2.theta2 = 0.0
         env3.theta1 = 0.0; env3.theta2 = 0.0; env3.theta3 = 0.0
         env2.dtheta1 = 0.0; env2.dtheta2 = 0.0
@@ -221,22 +224,15 @@ def main():
                                                 policy2, vecnorm2, policy3, vecnorm3,
                                                 max_steps=WAIT_MAX_STEPS, tol=TOLERANCE)
         if not ok:
-            d2 = np.linalg.norm(get_ee(env2) - targets[0])
-            d3 = np.linalg.norm(get_ee(env3) - targets[0])
-            print(f"Épisode {episode} échoué (première cible) après {steps_taken} steps : "
-                  f"dist2={d2:.3f} dist3={d3:.3f}")
+            print(f"Épisode {episode} échoué (première cible)")
             env2.close()
             env3.close()
             continue
-
-        seg_tried = 0
-        seg_success = 0
 
         for i in range(len(targets)-1):
             start_tgt = targets[i]
             end_tgt = targets[i+1]
 
-            seg_tried += 1
             s2, s3, ee2, ee3, a2, a3, success, info = record_one_segment(
                 env2, env3, start_tgt, end_tgt,
                 policy2, vecnorm2, policy3, vecnorm3,
@@ -245,47 +241,50 @@ def main():
             if not success:
                 continue
 
-            seg_success += 1
-            all_s2.append(s2)
-            all_s3.append(s3)
-            all_a2.append(a2)
-            all_a3.append(a3)
+            # ---------- Application du Spatial Sampling ----------
+            s2_ss = spatial_sampling(s2, NUM_SAMPLES)
+            s3_ss = spatial_sampling(s3, NUM_SAMPLES)
+            a2_ss = spatial_sampling(a2, NUM_SAMPLES)
+            a3_ss = spatial_sampling(a3, NUM_SAMPLES)
+
+            all_segments_s2.append(s2_ss)
+            all_segments_s3.append(s3_ss)
+            all_segments_a2.append(a2_ss)
+            all_segments_a3.append(a3_ss)
+
             valid_segments += 1
             pbar.update(1)
 
             elapsed = time.time() - start_time
             rate = valid_segments / elapsed if elapsed > 0 else 0
-            pbar.set_postfix({"rate": f"{rate:.2f} seg/s"}) ##, "ep": episode, "seg": i+1})
+            pbar.set_postfix({"rate": f"{rate:.2f} seg/s"})
 
             if valid_segments >= N_SEGMENTS_TARGET:
                 break
 
-        '''
-        print(f"Épisode {episode} terminé : tentés={seg_tried}, réussis={seg_success}, "
-              f"total valid={valid_segments}/{N_SEGMENTS_TARGET}")
-        '''
         env2.close()
         env3.close()
 
     pbar.close()
 
-    all_s2 = np.concatenate(all_s2, axis=0)
-    all_s3 = np.concatenate(all_s3, axis=0)
-    all_a2 = np.concatenate(all_a2, axis=0)
-    all_a3 = np.concatenate(all_a3, axis=0)
+    # Conversion en tableaux numpy : shape (n_segments, NUM_SAMPLES, dim)
+    segments_s2 = np.stack(all_segments_s2, axis=0)
+    segments_s3 = np.stack(all_segments_s3, axis=0)
+    segments_a2 = np.stack(all_segments_a2, axis=0)
+    segments_a3 = np.stack(all_segments_a3, axis=0)
 
-    print(f"\nGenerated {len(all_s2)} aligned samples from {valid_segments} segments.")
-    print(f"Episodes used: {episode}")
+    print(f"\nGenerated {len(segments_s2)} segments of length {NUM_SAMPLES} each.")
+    print(f"Total samples (pas de temps) : {segments_s2.shape[0] * segments_s2.shape[1]}")
 
     trajectories = {
-        'states_2dof': all_s2,
-        'states_3dof': all_s3,
-        'actions_2dof': all_a2,
-        'actions_3dof': all_a3,
+        'segments_2dof': segments_s2,   # (N, L, 6)
+        'segments_3dof': segments_s3,   # (N, L, 8)
+        'segments_actions_2dof': segments_a2,  # (N, L, 2)
+        'segments_actions_3dof': segments_a3,  # (N, L, 3)
         'metadata': {
             'n_segments': valid_segments,
-            'n_samples': len(all_s2),
-            'source': 'temporal_aligned_no_dtw',
+            'seq_len': NUM_SAMPLES,
+            'source': 'spatial_sampling',
         }
     }
     with open(traj_path, 'wb') as f:

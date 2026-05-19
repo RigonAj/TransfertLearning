@@ -4,14 +4,14 @@ import torch.optim as optim
 import numpy as np
 import pickle
 from pathlib import Path
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from typing import Dict
 
 from agents.transfer.mapper_models import StateMapperMLP, ActionMapperMLP
 
-torch.set_num_threads(2)
+torch.set_num_threads(1)
 
 
 def ee_from_state(state: np.ndarray, dof: int) -> np.ndarray:
@@ -28,6 +28,21 @@ def ee_from_state(state: np.ndarray, dof: int) -> np.ndarray:
     return np.array([x, y], dtype=np.float32)
 
 
+class SegmentDataset(Dataset):
+    """Dataset qui retourne un segment complet (séquence) à la fois."""
+    def __init__(self, segments_s3, segments_s2, segments_a2, segments_a3):
+        self.s3 = torch.from_numpy(segments_s3).float()  # (N, L, 8)
+        self.s2 = torch.from_numpy(segments_s2).float()  # (N, L, 6)
+        self.a2 = torch.from_numpy(segments_a2).float()  # (N, L, 2)
+        self.a3 = torch.from_numpy(segments_a3).float()  # (N, L, 3)
+
+    def __len__(self):
+        return len(self.s3)
+
+    def __getitem__(self, idx):
+        return self.s3[idx], self.s2[idx], self.a2[idx], self.a3[idx]
+
+
 class Transfer2to3:
     def __init__(self, device: str = "cpu", log_dir: str = None):
         self.device = device
@@ -40,84 +55,100 @@ class Transfer2to3:
         self.opt_action = optim.Adam(self.action_mapper.parameters(), lr=3e-4, weight_decay=1e-5)
         self.criterion = nn.MSELoss()
 
-    def train(self, trajectories: Dict, epochs: int = 1000, batch_size: int = 512, patience: int = 50):
-        print("\n=== TRAINING TRANSFER 2→3 (on Reaching data) ===")
+    def train(self, trajectories: Dict, epochs: int = 1000, batch_size: int = 32, patience: int = 50):
+        print("\n=== TRAINING TRANSFER 2→3 (on Reaching data with SEQUENCES) ===")
 
-        # ALIGNEMENT DES DONNÉES
-        min_len = min(
-            len(trajectories['states_3dof']),
-            len(trajectories['states_2dof']),
-            len(trajectories['actions_2dof']),
-            len(trajectories['actions_3dof'])
-        )
-        print(f"Aligning data to minimum length: {min_len} samples")
+        segments_s3 = trajectories['segments_3dof']   # (N, L, 8)
+        segments_s2 = trajectories['segments_2dof']   # (N, L, 6)
+        segments_a2 = trajectories['segments_actions_2dof']
+        segments_a3 = trajectories['segments_actions_3dof']
 
-        s3 = torch.tensor(trajectories['states_3dof'][:min_len], dtype=torch.float32).to(self.device)
-        s2 = torch.tensor(trajectories['states_2dof'][:min_len], dtype=torch.float32).to(self.device)
-        a2 = torch.tensor(trajectories['actions_2dof'][:min_len], dtype=torch.float32).to(self.device)
-        a3 = torch.tensor(trajectories['actions_3dof'][:min_len], dtype=torch.float32).to(self.device)
+        N = segments_s3.shape[0]
+        seq_len = segments_s3.shape[1]
+        print(f"Segments: {N}, sequence length: {seq_len}")
 
-        n = len(s3)
-        idx = torch.randperm(n)
-        cut = int(n * 0.9)
-        train_idx, val_idx = idx[:cut], idx[cut:]
+        dataset = SegmentDataset(segments_s3, segments_s2, segments_a2, segments_a3)
+        n_val = int(0.1 * N)
+        n_train = N - n_val
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [n_train, n_val])
 
-        train_loader = DataLoader(TensorDataset(s3[train_idx], s2[train_idx], a2[train_idx], a3[train_idx]),
-                                  batch_size=batch_size, shuffle=True, pin_memory=True)
-        val_loader = DataLoader(TensorDataset(s3[val_idx], s2[val_idx], a2[val_idx], a3[val_idx]),
-                                batch_size=batch_size*2, shuffle=False, pin_memory=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=False)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, pin_memory=False)
 
         best_val = float('inf')
         wait = 0
         best_state = None
         best_action = None
 
-        pbar = tqdm(range(epochs), desc="2→3 Transfer")
+        pbar = tqdm(range(epochs), desc="2→3 Transfer (seq)")
         for epoch in pbar:
-            # Training
+            # --- Training ---
             self.state_mapper.train()
             self.action_mapper.train()
-            train_loss_s = train_loss_a = 0.0
+            train_loss_s = 0.0
+            train_loss_a = 0.0
 
-            for s3b, s2b, a2b, a3b in train_loader:
+            for s3_seq, s2_seq, a2_seq, a3_seq in train_loader:
+                # s3_seq: (B, L, 8)  -> on aplatit en (B*L, 8) pour appliquer le MLP
+                B, L, D3 = s3_seq.shape
+                s3_flat = s3_seq.view(B * L, D3)
+                s2_flat = s2_seq.view(B * L, -1)
+                a2_flat = a2_seq.view(B * L, -1)
+                a3_flat = a3_seq.view(B * L, -1)
+
+                # State mapper
                 self.opt_state.zero_grad()
-                loss_s = self.criterion(self.state_mapper(s3b), s2b)
+                s2_pred = self.state_mapper(s3_flat)
+                loss_s = self.criterion(s2_pred, s2_flat)
                 loss_s.backward()
                 self.opt_state.step()
-                train_loss_s += loss_s.item()
+                train_loss_s += loss_s.item() * B  # pour pondérer par batch
 
+                # Action mapper
                 self.opt_action.zero_grad()
-                pred = self.action_mapper(s3b, a2b)
-                loss_a = self.criterion(pred, a3b)
+                a3_pred = self.action_mapper(s3_flat, a2_flat)
+                loss_a = self.criterion(a3_pred, a3_flat)
                 loss_a.backward()
                 self.opt_action.step()
-                train_loss_a += loss_a.item()
+                train_loss_a += loss_a.item() * B
 
-            train_loss_s /= len(train_loader)
-            train_loss_a /= len(train_loader)
+            train_loss_s /= len(train_dataset)
+            train_loss_a /= len(train_dataset)
 
-            # Validation
+            # --- Validation ---
             self.state_mapper.eval()
             self.action_mapper.eval()
-            val_loss_s = val_loss_a = 0.0
+            val_loss_s = 0.0
+            val_loss_a = 0.0
             with torch.no_grad():
-                for s3b, s2b, a2b, a3b in val_loader:
-                    val_loss_s += self.criterion(self.state_mapper(s3b), s2b).item()
-                    val_loss_a += self.criterion(self.action_mapper(s3b, a2b), a3b).item()
+                for s3_seq, s2_seq, a2_seq, a3_seq in val_loader:
+                    B, L, D3 = s3_seq.shape
+                    s3_flat = s3_seq.view(B * L, D3)
+                    s2_flat = s2_seq.view(B * L, -1)
+                    a2_flat = a2_seq.view(B * L, -1)
+                    a3_flat = a3_seq.view(B * L, -1)
 
-            val_loss_s /= len(val_loader)
-            val_loss_a /= len(val_loader)
+                    s2_pred = self.state_mapper(s3_flat)
+                    loss_s = self.criterion(s2_pred, s2_flat)
+                    a3_pred = self.action_mapper(s3_flat, a2_flat)
+                    loss_a = self.criterion(a3_pred, a3_flat)
+
+                    val_loss_s += loss_s.item() * B
+                    val_loss_a += loss_a.item() * B
+
+            val_loss_s /= len(val_dataset)
+            val_loss_a /= len(val_dataset)
             total_val = val_loss_s + val_loss_a
 
-            # Fidelity (améliorée)
-            fidelity = self._evaluate_fidelity(trajectories, min_len)
+            # Fidelity (sur un sous‑ensemble de segments entiers)
+            fidelity = self._evaluate_fidelity_segments(segments_s3, segments_s2, segments_a2, segments_a3,
+                                                        n_samples=min(200, N))
 
             if self.writer:
                 self.writer.add_scalar("2to3/loss_state_val", val_loss_s, epoch)
                 self.writer.add_scalar("2to3/loss_action_val", val_loss_a, epoch)
                 self.writer.add_scalar("2to3/action_mse", fidelity['action_mse'], epoch)
                 self.writer.add_scalar("2to3/ee_error", fidelity['ee_error'], epoch)
-                self.writer.add_scalar("2to3/total_fidelity", fidelity['action_mse'] + 10 * fidelity['ee_error'], epoch)
 
             pbar.set_postfix({
                 "s_val": f"{val_loss_s:.5f}",
@@ -144,31 +175,36 @@ class Transfer2to3:
         print(f"2→3 Training done - Best val loss: {best_val:.6f}")
 
     @torch.no_grad()
-    def _evaluate_fidelity(self, trajectories: Dict, min_len: int, n_samples=2048):
-        n_samples = min(n_samples, min_len)
-        idx = np.random.choice(min_len, n_samples, replace=False)
+    def _evaluate_fidelity_segments(self, segments_s3, segments_s2, segments_a2, segments_a3, n_samples=200):
+        """Évalue la fidélité sur des segments complets (non aplatis)."""
+        idx = np.random.choice(len(segments_s3), n_samples, replace=False)
+        total_action_mse = 0.0
+        total_ee_error = 0.0
 
-        s3 = torch.tensor(trajectories['states_3dof'][idx], device=self.device)
-        a2 = torch.tensor(trajectories['actions_2dof'][idx], device=self.device)
-        a3 = torch.tensor(trajectories['actions_3dof'][idx], device=self.device)
+        for i in idx:
+            s3_seq = torch.from_numpy(segments_s3[i]).float().to(self.device)  # (L, 8)
+            s2_seq = torch.from_numpy(segments_s2[i]).float().to(self.device)  # (L, 6)
+            a2_seq = torch.from_numpy(segments_a2[i]).float().to(self.device)  # (L, 2)
+            a3_seq = torch.from_numpy(segments_a3[i]).float().to(self.device)  # (L, 3)
 
-        s2_pred = self.state_mapper(s3)
-        a3_pred = self.action_mapper(s3, a2)
+            L = s3_seq.shape[0]
+            s2_pred = self.state_mapper(s3_seq)          # (L, 6)
+            a3_pred = self.action_mapper(s3_seq, a2_seq) # (L, 3)
 
-        action_mse = self.criterion(a3_pred, a3).item()
+            action_mse = self.criterion(a3_pred, a3_seq).item()
+            total_action_mse += action_mse
 
-        # Erreur d'effecteur terminal (end‑effector)
-        ee_error = 0.0
-        n_eval = min(512, len(s3))
-        for i in range(n_eval):
-            ee_pred = ee_from_state(s2_pred[i].cpu().numpy(), 2)
-            ee_real = ee_from_state(s3[i].cpu().numpy(), 3)
-            ee_error += np.linalg.norm(ee_pred - ee_real) ** 2
-        ee_error /= n_eval
+            # Erreur d'effecteur sur toute la séquence (moyenne)
+            ee_err_seq = 0.0
+            for t in range(L):
+                ee_pred = ee_from_state(s2_pred[t].cpu().numpy(), 2)
+                ee_real = ee_from_state(s3_seq[t].cpu().numpy(), 3)
+                ee_err_seq += np.linalg.norm(ee_pred - ee_real) ** 2
+            total_ee_error += ee_err_seq / L
 
         return {
-            'action_mse': action_mse,
-            'ee_error': float(ee_error)
+            'action_mse': total_action_mse / n_samples,
+            'ee_error': total_ee_error / n_samples
         }
 
     def save(self, path: str):
@@ -192,83 +228,107 @@ class Transfer3to2:
         self.opt_action = optim.Adam(self.action_mapper.parameters(), lr=3e-4, weight_decay=1e-5)
         self.criterion = nn.MSELoss()
 
-    def train(self, trajectories: Dict, epochs: int = 1000, batch_size: int = 512, patience: int = 60):
-        print("\n=== TRAINING TRANSFER 3→2 (on Reaching data) ===")
+    def train(self, trajectories: Dict, epochs: int = 1000, batch_size: int = 32, patience: int = 60):
+        print("\n=== TRAINING TRANSFER 3→2 (on Reaching data with SEQUENCES) ===")
 
-        min_len = min(
-            len(trajectories['states_2dof']),
-            len(trajectories['states_3dof']),
-            len(trajectories['actions_3dof']),
-            len(trajectories['actions_2dof'])
-        )
-        print(f"Aligning data to minimum length: {min_len} samples")
+        segments_s3 = trajectories['segments_3dof']
+        segments_s2 = trajectories['segments_2dof']
+        segments_a2 = trajectories['segments_actions_2dof']
+        segments_a3 = trajectories['segments_actions_3dof']
 
-        s2 = torch.tensor(trajectories['states_2dof'][:min_len], dtype=torch.float32).to(self.device)
-        s3 = torch.tensor(trajectories['states_3dof'][:min_len], dtype=torch.float32).to(self.device)
-        a3 = torch.tensor(trajectories['actions_3dof'][:min_len], dtype=torch.float32).to(self.device)
-        a2 = torch.tensor(trajectories['actions_2dof'][:min_len], dtype=torch.float32).to(self.device)
+        N = segments_s3.shape[0]
+        seq_len = segments_s3.shape[1]
+        print(f"Segments: {N}, sequence length: {seq_len}")
 
-        n = len(s2)
-        idx = torch.randperm(n)
-        cut = int(n * 0.9)
-        train_idx, val_idx = idx[:cut], idx[cut:]
+        dataset = SegmentDataset(segments_s3, segments_s2, segments_a2, segments_a3)  # mêmes données, ordre différent pour 3→2
+        # Note: pour 3→2 on utilise state_mapper(s2) -> s3, action_mapper(s2, a3) -> a2
+        # On peut réutiliser le même dataset, mais il faut l'adapter. Je crée un dataset spécifique:
+        class SegDataset3to2(Dataset):
+            def __init__(self, s2, s3, a3, a2):
+                self.s2 = torch.from_numpy(s2).float()
+                self.s3 = torch.from_numpy(s3).float()
+                self.a3 = torch.from_numpy(a3).float()
+                self.a2 = torch.from_numpy(a2).float()
+            def __len__(self): return len(self.s2)
+            def __getitem__(self, i): return self.s2[i], self.s3[i], self.a3[i], self.a2[i]
 
-        train_loader = DataLoader(TensorDataset(s2[train_idx], s3[train_idx], a3[train_idx], a2[train_idx]),
-                                  batch_size=batch_size, shuffle=True, pin_memory=True)
-        val_loader = DataLoader(TensorDataset(s2[val_idx], s3[val_idx], a3[val_idx], a2[val_idx]),
-                                batch_size=batch_size*2, shuffle=False, pin_memory=True)
+        dataset_32 = SegDataset3to2(segments_s2, segments_s3, segments_a3, segments_a2)
+        n_val = int(0.1 * N)
+        n_train = N - n_val
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset_32, [n_train, n_val])
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=False)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, pin_memory=False)
 
         best_val = float('inf')
         wait = 0
         best_state = None
         best_action = None
 
-        pbar = tqdm(range(epochs), desc="3→2 Transfer")
+        pbar = tqdm(range(epochs), desc="3→2 Transfer (seq)")
         for epoch in pbar:
-            # Training
             self.state_mapper.train()
             self.action_mapper.train()
-            train_loss_s = train_loss_a = 0.0
+            train_loss_s = 0.0
+            train_loss_a = 0.0
 
-            for s2b, s3b, a3b, a2b in train_loader:
+            for s2_seq, s3_seq, a3_seq, a2_seq in train_loader:
+                B, L, D2 = s2_seq.shape
+                s2_flat = s2_seq.view(B * L, D2)
+                s3_flat = s3_seq.view(B * L, -1)
+                a3_flat = a3_seq.view(B * L, -1)
+                a2_flat = a2_seq.view(B * L, -1)
+
                 self.opt_state.zero_grad()
-                loss_s = self.criterion(self.state_mapper(s2b), s3b)
+                s3_pred = self.state_mapper(s2_flat)
+                loss_s = self.criterion(s3_pred, s3_flat)
                 loss_s.backward()
                 self.opt_state.step()
-                train_loss_s += loss_s.item()
+                train_loss_s += loss_s.item() * B
 
                 self.opt_action.zero_grad()
-                pred = self.action_mapper(s2b, a3b)
-                loss_a = self.criterion(pred, a2b)
+                a2_pred = self.action_mapper(s2_flat, a3_flat)
+                loss_a = self.criterion(a2_pred, a2_flat)
                 loss_a.backward()
                 self.opt_action.step()
-                train_loss_a += loss_a.item()
+                train_loss_a += loss_a.item() * B
 
-            train_loss_s /= len(train_loader)
-            train_loss_a /= len(train_loader)
+            train_loss_s /= len(train_dataset)
+            train_loss_a /= len(train_dataset)
 
-            # Validation
             self.state_mapper.eval()
             self.action_mapper.eval()
-            val_loss_s = val_loss_a = 0.0
+            val_loss_s = 0.0
+            val_loss_a = 0.0
             with torch.no_grad():
-                for s2b, s3b, a3b, a2b in val_loader:
-                    val_loss_s += self.criterion(self.state_mapper(s2b), s3b).item()
-                    val_loss_a += self.criterion(self.action_mapper(s2b, a3b), a2b).item()
+                for s2_seq, s3_seq, a3_seq, a2_seq in val_loader:
+                    B, L, D2 = s2_seq.shape
+                    s2_flat = s2_seq.view(B * L, D2)
+                    s3_flat = s3_seq.view(B * L, -1)
+                    a3_flat = a3_seq.view(B * L, -1)
+                    a2_flat = a2_seq.view(B * L, -1)
 
-            val_loss_s /= len(val_loader)
-            val_loss_a /= len(val_loader)
+                    s3_pred = self.state_mapper(s2_flat)
+                    loss_s = self.criterion(s3_pred, s3_flat)
+                    a2_pred = self.action_mapper(s2_flat, a3_flat)
+                    loss_a = self.criterion(a2_pred, a2_flat)
+
+                    val_loss_s += loss_s.item() * B
+                    val_loss_a += loss_a.item() * B
+
+            val_loss_s /= len(val_dataset)
+            val_loss_a /= len(val_dataset)
             total_val = val_loss_s + val_loss_a
 
-            # Fidelity (améliorée)
-            fidelity = self._evaluate_fidelity(trajectories, min_len)
+            # Fidelity
+            fidelity = self._evaluate_fidelity_segments(segments_s2, segments_s3, segments_a3, segments_a2,
+                                                        n_samples=min(200, N))
 
             if self.writer:
                 self.writer.add_scalar("3to2/loss_state_val", val_loss_s, epoch)
                 self.writer.add_scalar("3to2/loss_action_val", val_loss_a, epoch)
                 self.writer.add_scalar("3to2/action_mse", fidelity['action_mse'], epoch)
                 self.writer.add_scalar("3to2/ee_error", fidelity['ee_error'], epoch)
-                self.writer.add_scalar("3to2/total_fidelity", fidelity['action_mse'] + 10 * fidelity['ee_error'], epoch)
 
             pbar.set_postfix({
                 "s_val": f"{val_loss_s:.5f}",
@@ -295,31 +355,34 @@ class Transfer3to2:
         print(f"3→2 Training done - Best val loss: {best_val:.6f}")
 
     @torch.no_grad()
-    def _evaluate_fidelity(self, trajectories: Dict, min_len: int, n_samples=2048):
-        n_samples = min(n_samples, min_len)
-        idx = np.random.choice(min_len, n_samples, replace=False)
+    def _evaluate_fidelity_segments(self, segments_s2, segments_s3, segments_a3, segments_a2, n_samples=200):
+        idx = np.random.choice(len(segments_s2), n_samples, replace=False)
+        total_action_mse = 0.0
+        total_ee_error = 0.0
 
-        s2 = torch.tensor(trajectories['states_2dof'][idx], device=self.device)
-        a3 = torch.tensor(trajectories['actions_3dof'][idx], device=self.device)
-        a2 = torch.tensor(trajectories['actions_2dof'][idx], device=self.device)
+        for i in idx:
+            s2_seq = torch.from_numpy(segments_s2[i]).float().to(self.device)  # (L, 6)
+            s3_seq = torch.from_numpy(segments_s3[i]).float().to(self.device)  # (L, 8)
+            a3_seq = torch.from_numpy(segments_a3[i]).float().to(self.device)  # (L, 3)
+            a2_seq = torch.from_numpy(segments_a2[i]).float().to(self.device)  # (L, 2)
 
-        s3_pred = self.state_mapper(s2)
-        a2_pred = self.action_mapper(s2, a3)
+            L = s2_seq.shape[0]
+            s3_pred = self.state_mapper(s2_seq)
+            a2_pred = self.action_mapper(s2_seq, a3_seq)
 
-        action_mse = self.criterion(a2_pred, a2).item()
+            action_mse = self.criterion(a2_pred, a2_seq).item()
+            total_action_mse += action_mse
 
-        # Erreur d'effecteur terminal : on compare l'EE du 3dof prédit avec l'EE réel du 2dof
-        ee_error = 0.0
-        n_eval = min(512, len(s2))
-        for i in range(n_eval):
-            ee_pred = ee_from_state(s3_pred[i].cpu().numpy(), 3)   # depuis l'état 3dof prédit
-            ee_real = ee_from_state(s2[i].cpu().numpy(), 2)        # depuis l'état 2dof réel
-            ee_error += np.linalg.norm(ee_pred - ee_real) ** 2
-        ee_error /= n_eval
+            ee_err_seq = 0.0
+            for t in range(L):
+                ee_pred = ee_from_state(s3_pred[t].cpu().numpy(), 3)
+                ee_real = ee_from_state(s2_seq[t].cpu().numpy(), 2)
+                ee_err_seq += np.linalg.norm(ee_pred - ee_real) ** 2
+            total_ee_error += ee_err_seq / L
 
         return {
-            'action_mse': action_mse,
-            'ee_error': float(ee_error)
+            'action_mse': total_action_mse / n_samples,
+            'ee_error': total_ee_error / n_samples
         }
 
     def save(self, path: str):
@@ -335,23 +398,22 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data_dir = Path("./data/DIRECT")
 
-    traj_path = data_dir / "trajectories_aligned.pkl"
+    traj_path = data_dir / "trajectories_aligned_ss.pkl"   # nouveau fichier
     with open(traj_path, 'rb') as f:
         trajectories = pickle.load(f)
 
-    print(f"Loaded {trajectories['metadata']['n_samples']} samples")
+    print(f"Loaded {trajectories['metadata']['n_segments']} segments of length {trajectories['metadata']['seq_len']}")
 
-    # Création des dossiers de logs
     runs_dir = Path("./data/DIRECT/mappers_logs")
     runs_dir.mkdir(exist_ok=True)
 
-    t23 = Transfer2to3(device=device, log_dir=str(runs_dir / "transfer_2to3"))
-    t23.train(trajectories, epochs=1200, patience=50)
-    t23.save(data_dir / "transfer_2to3.pt")
+    t23 = Transfer2to3(device=device, log_dir=str(runs_dir / "transfer_2to3_seq"))
+    t23.train(trajectories, epochs=1200, batch_size=32, patience=50)
+    t23.save(data_dir / "transfer_2to3_seq.pt")
 
-    t32 = Transfer3to2(device=device, log_dir=str(runs_dir / "transfer_3to2"))
-    t32.train(trajectories, epochs=1200, patience=60)
-    t32.save(data_dir / "transfer_3to2.pt")
+    t32 = Transfer3to2(device=device, log_dir=str(runs_dir / "transfer_3to2_seq"))
+    t32.train(trajectories, epochs=1200, batch_size=32, patience=60)
+    t32.save(data_dir / "transfer_3to2_seq.pt")
 
     print("\n=== ENTRAÎNEMENT TERMINÉ ===")
     print("→ Lance tensorboard avec : tensorboard --logdir ./data")

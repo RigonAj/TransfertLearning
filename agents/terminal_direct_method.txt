@@ -7,7 +7,7 @@ source .venv/bin/activate
 
 #tensorboard
 tensorboard --logdir models         #agents training
-tensorboard --logdir data #.DIRECT.mappers_logs   #mappers training
+tensorboard --logdir data           #mappers training
 
 
 
@@ -21,8 +21,7 @@ python3 -m agents.train.train_pushball_3dof
 
 # train mappers
 python3 -m agents.transfer.trajectories
-python3 -m agents.transfer.mappings_3to2dof
-python3 -m agents.transfer.mappings_2to3dof
+python3 -m agents.transfer.train_mappers
 
 
 

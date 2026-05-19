@@ -1,186 +1,108 @@
-"""
-Transfer Learning — PushBall Task (3 → 2 DOF)
-"""
-
 import numpy as np
 import torch
-import pickle
 from pathlib import Path
+from tqdm import tqdm
+
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 
-from envs.env_pushball_3dof import PushBallEnv_3dof
 from envs.env_pushball_2dof import PushBallEnv_2dof
+from envs.env_pushball_3dof import PushBallEnv_3dof
+from agents.transfer.mapper_models import StateMapperMLP, ActionMapperMLP
 
-from agents.transfer.mappings_2to3dof import StateMapperMLP   # 6 → 8
-from agents.transfer.mappings_3to2dof import ActionMapperMLP  # (8, 3) → 2
 
-
-class TransferPolicy:
-    def __init__(
-        self,
-        policy_3dof_path: str,
-        vecnorm_3dof_path: str,
-        state_mapper_path: str,
-        action_mapper_path: str,
-        device: str = "cpu",
-    ):
+class PushBallTransfer3to2:
+    def __init__(self, policy_3dof_path: str, vecnorm_3dof_path: str,
+                 state_mapper_path: str, action_mapper_path: str, device="cpu"):
         self.device = device
 
-        custom_objects = {
-            "learning_rate": 0.0003,
-            "lr_schedule": lambda _: 0.0003,
-            "clip_range": lambda _: 0.2,
-        }
-        self.policy_3dof = PPO.load(policy_3dof_path, device=device, custom_objects=custom_objects)
+        self.policy_3dof = PPO.load(policy_3dof_path, device=device)
 
-        def make_dummy_3dof():
-            return Monitor(PushBallEnv_3dof(render_mode=None))
-
-        venv = DummyVecEnv([make_dummy_3dof])
+        # VecNormalize 3DoF
+        venv = DummyVecEnv([lambda: Monitor(PushBallEnv_3dof(render_mode=None))])
         self.vec_norm_3dof = VecNormalize.load(vecnorm_3dof_path, venv=venv)
         self.vec_norm_3dof.training = False
         self.vec_norm_3dof.norm_reward = False
         venv.close()
 
-        self.state_mapper = StateMapperMLP(input_dim=6, output_dim=8).to(device)
+        # Mappers 3→2
+        self.state_mapper = StateMapperMLP(6, 8).to(device)      # 2→3 obs
         self.state_mapper.load_state_dict(torch.load(state_mapper_path, map_location=device))
         self.state_mapper.eval()
 
-        self.action_mapper = ActionMapperMLP(state_dim=8, action_3dof_dim=3, output_dim=2).to(device)
+        self.action_mapper = ActionMapperMLP(8, 3, 2).to(device) # 3obs + 3act → 2act
         self.action_mapper.load_state_dict(torch.load(action_mapper_path, map_location=device))
         self.action_mapper.eval()
 
-        print("[Transfer] PushBall 3→2 loaded successfully")
+        print("✅ PushBall Transfer 3→2 loaded successfully")
 
     @torch.no_grad()
-    def predict(self, raw_obs_2dof: np.ndarray) -> np.ndarray:
-        if raw_obs_2dof.ndim == 1:
-            raw_obs_2dof = raw_obs_2dof.reshape(1, -1)
+    def predict(self, obs_2dof: np.ndarray) -> np.ndarray:
+        if obs_2dof.ndim == 1:
+            obs_2dof = obs_2dof.reshape(1, -1)
 
-        arm_obs_2dof = raw_obs_2dof[:, :6]
-        task_obs_2dof = raw_obs_2dof[:, 6:]
+        arm_2 = obs_2dof[:, :6]
+        task = obs_2dof[:, 6:]   # 4D task for pushball
 
-        arm_t = torch.tensor(arm_obs_2dof, dtype=torch.float32, device=self.device)
-        arm_obs_3dof_equiv = self.state_mapper(arm_t).cpu().numpy()
+        # 2DoF arm → 3DoF arm equivalent
+        arm_3 = self.state_mapper(torch.from_numpy(arm_2).float().to(self.device))
+        arm_3 = arm_3.cpu().numpy()
 
-        full_obs_3dof_equiv = np.concatenate([arm_obs_3dof_equiv, task_obs_2dof], axis=1)
-        obs_3dof_norm = self.vec_norm_3dof.normalize_obs(full_obs_3dof_equiv)
+        # Reconstruct full 3DoF observation
+        full_obs_3 = np.concatenate([arm_3, task], axis=1)
+        norm_obs = self.vec_norm_3dof.normalize_obs(full_obs_3)
 
-        action_3dof, _ = self.policy_3dof.predict(obs_3dof_norm, deterministic=True)
+        # Get 3DoF action
+        act_3, _ = self.policy_3dof.predict(norm_obs, deterministic=True)
 
-        arm_3dof_t = torch.tensor(arm_obs_3dof_equiv, dtype=torch.float32, device=self.device)
-        a3_t = torch.tensor(action_3dof, dtype=torch.float32, device=self.device)
-        action_2dof = self.action_mapper(arm_3dof_t, a3_t).cpu().numpy()
-
-        return action_2dof
-
-    def save(self, save_dir: str):
-        save_path = Path(save_dir)
-        save_path.mkdir(parents=True, exist_ok=True)
-        transfer_config = {
-            'policy_3dof_path': self.policy_3dof_path,
-            'vecnorm_3dof_path': self.vecnorm_3dof_path,
-            'state_mapper_path': self.state_mapper_path,
-            'action_mapper_path': self.action_mapper_path,
-            'device': self.device,
-        }
-        with open(save_path / "transfer_config.pkl", 'wb') as f:
-            pickle.dump(transfer_config, f)
-
-    @classmethod
-    def load_from_config(cls, save_dir: str, device: str = "cpu"):
-        save_path = Path(save_dir)
-        config_path = save_path / "transfer_config.pkl"
-        if not config_path.exists():
-            raise FileNotFoundError(f"Configuration not found: {config_path}")
-        with open(config_path, 'rb') as f:
-            config = pickle.load(f)
-        return cls(
-            policy_3dof_path=config['policy_3dof_path'],
-            vecnorm_3dof_path=config['vecnorm_3dof_path'],
-            state_mapper_path=config['state_mapper_path'],
-            action_mapper_path=config['action_mapper_path'],
-            device=device,
+        # Map to 2DoF action
+        act_2 = self.action_mapper(
+            torch.from_numpy(arm_3).float().to(self.device),
+            torch.from_numpy(act_3).float().to(self.device)
         )
+        return act_2.cpu().numpy()
 
 
 def main():
-    DEVICE = "cpu"
-    NUM_EPISODES = 1000
+    # ==================== CONFIG ====================
+    POLICY_3DOF   = "./models/ppo_pushball_3dof_1/best_model.zip"
+    VECNORM_3DOF  = "./models/ppo_pushball_3dof_1/vec_normalize.pkl"
+    STATE_MAPPER  = "./data/DIRECT/transfer_3to2.pt"
+    ACTION_MAPPER = "./data/DIRECT/action_mapper_3to2dof.pt"
 
-    run_id_3dof = 1
-    save_transfer_id = 1
+    transfer = PushBallTransfer3to2(POLICY_3DOF, VECNORM_3DOF, STATE_MAPPER, ACTION_MAPPER)
 
-    POLICY_3DOF_PATH   = f"./models/ppo_pushball_3dof_{run_id_3dof}/best_model.zip"
-    VECNORM_3DOF_PATH  = f"./models/ppo_pushball_3dof_{run_id_3dof}/vec_normalize.pkl"
-    STATE_MAPPER_PATH  = "./data/DIRECT/state_mapper_2to3dof.pt"      # 6 → 8
-    ACTION_MAPPER_PATH = "./data/DIRECT/action_mapper_3to2dof.pt"     # (8+3)→2
-    SAVE_DIR = f"./models/ppo_transfer_pushball_3to2_{save_transfer_id}"
-
-    for p in [POLICY_3DOF_PATH, VECNORM_3DOF_PATH, STATE_MAPPER_PATH, ACTION_MAPPER_PATH]:
-        if not Path(p).exists():
-            print(f"❌ File not found: {p}")
-            return
-
-    print("\n" + "="*60)
-    print("TRANSFER LEARNING TEST: 3-DoF PushBall → 2-DoF Environment")
-    print("="*60)
-
-    policy = TransferPolicy(
-        policy_3dof_path=POLICY_3DOF_PATH,
-        vecnorm_3dof_path=VECNORM_3DOF_PATH,
-        state_mapper_path=STATE_MAPPER_PATH,
-        action_mapper_path=ACTION_MAPPER_PATH,
-        device=DEVICE,
-    )
-
-    def make_env():
-        return Monitor(PushBallEnv_2dof(render_mode=None))
-    env = DummyVecEnv([make_env])
+    env = DummyVecEnv([lambda: Monitor(PushBallEnv_2dof(render_mode=None))])
+    n_episodes = 500
+    max_steps = 400
 
     successes = 0
-    steps_on_success = []
-    final_dist_failure = []
+    steps_success = []
 
-    for ep in range(NUM_EPISODES):
+    for ep in tqdm(range(n_episodes), desc="PushBall 3→2 Transfer Test"):
         obs = env.reset()
         done = False
-        step = 0
-        info_last = {}
+        steps = 0
 
-        while not done:
-            action_2dof = policy.predict(obs[0])
-            obs, _, dones, infos = env.step(action_2dof)
-            step += 1
+        while not done and steps < max_steps:
+            action = transfer.predict(obs[0])
+            obs, _, dones, infos = env.step([action])
+            steps += 1
             done = dones[0]
-            info_last = infos[0]
+            info = infos[0]
 
-        if info_last.get("target_reached", False):
+        if info.get("target_reached", False):
             successes += 1
-            steps_on_success.append(step)
-        else:
-            final_dist_failure.append(info_last.get("dist_ball_target", float("nan")))
+            steps_success.append(steps)
 
-        if (ep + 1) % 200 == 0:
-            print(f"  Progress: {ep + 1}/{NUM_EPISODES}  "
-                  f"(succès partiel: {100 * successes / (ep + 1):.1f}%)")
+    rate = successes / n_episodes * 100
+    print(f"\n=== PUSHBALL TRANSFER 3→2 RESULTS ===")
+    print(f"Success Rate : {rate:.2f}%  ({successes}/{n_episodes})")
+    if steps_success:
+        print(f"Avg steps (success) : {np.mean(steps_success):.1f}")
+    print("="*50)
 
-    rate = 100.0 * successes / NUM_EPISODES
-    print("\n" + "="*70)
-    print("RÉSULTATS DU TRANSFERT")
-    print("="*70)
-    print(f"  Épisodes testés       : {NUM_EPISODES}")
-    print(f"  Réussites             : {successes}")
-    print(f"  Taux de réussite      : {rate:.1f}%")
-    if steps_on_success:
-        print(f"  Steps moyens (succès) : {np.mean(steps_on_success):.1f}")
-    if final_dist_failure:
-        print(f"  Distance moy (échec)  : {np.mean(final_dist_failure):.4f} m")
-    print("="*70)
-
-    policy.save(SAVE_DIR)
     env.close()
 
 

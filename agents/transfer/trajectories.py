@@ -10,9 +10,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from envs.env_continuous_reaching_2dof import Arm2DoFPersistentEnv
 from envs.env_continuous_reaching_3dof import Arm3DoFPersistentEnv
-
-# FIX #1 : chemin d'import corrigé (était agents.transfer.utils)
-from .utils import spatial_sampling_aligned
+from transfer.utils import spatial_sampling_aligned   # FIX #1 : import corrigé
 
 import torch
 torch.set_num_threads(4)
@@ -25,12 +23,12 @@ torch.set_num_threads(4)
 def load_policy_and_vecnorm(model_path, vec_path, env_factory, device="cpu"):
     model = PPO.load(model_path, device=device, custom_objects={
         "learning_rate": 0.0003,
-        "lr_schedule": lambda _: 0.0003,
-        "clip_range": lambda _: 0.2,
+        "lr_schedule":   lambda _: 0.0003,
+        "clip_range":    lambda _: 0.2,
     })
-    venv = DummyVecEnv([env_factory])
+    venv     = DummyVecEnv([env_factory])
     vec_norm = VecNormalize.load(vec_path, venv=venv)
-    vec_norm.training   = False
+    vec_norm.training    = False
     vec_norm.norm_reward = False
     return model, vec_norm, venv
 
@@ -70,10 +68,8 @@ def generate_target_sequence(rng, length, max_reach, scale=0.98):
 
 
 def both_close_to_target(env2, env3, target, tol=0.2):
-    ee2 = get_ee(env2)
-    ee3 = get_ee(env3)
-    return (np.linalg.norm(ee2 - target) < tol and
-            np.linalg.norm(ee3 - target) < tol)
+    return (np.linalg.norm(get_ee(env2) - target) < tol and
+            np.linalg.norm(get_ee(env3) - target) < tol)
 
 
 def wait_until_both_close(env2, env3, target, policy2, vecnorm2, policy3, vecnorm3,
@@ -82,10 +78,8 @@ def wait_until_both_close(env2, env3, target, policy2, vecnorm2, policy3, vecnor
     override_target(env3, target)
     steps = 0
     while steps < max_steps and not both_close_to_target(env2, env3, target, tol):
-        act2 = predict_action(policy2, vecnorm2, env2._get_obs())
-        act3 = predict_action(policy3, vecnorm3, env3._get_obs())
-        env2.step(act2)
-        env3.step(act3)
+        env2.step(predict_action(policy2, vecnorm2, env2._get_obs()))
+        env3.step(predict_action(policy3, vecnorm3, env3._get_obs()))
         steps += 1
     return both_close_to_target(env2, env3, target, tol), steps
 
@@ -94,16 +88,9 @@ def record_one_segment(env2, env3, start_target, end_target,
                         policy2, vecnorm2, policy3, vecnorm3,
                         max_steps=300, tol=0.2):
     """
-    Collecte un segment de trajectoire entre start_target et end_target pour
-    les deux bras simultanément.
-
-    Retourne (states2, states3, ee2, ee3, actions2, actions3, success, info)
-    où states et actions sont ALIGNÉS temporellement :
-      states[t] est l'état depuis lequel actions[t] a été choisie.
-
-    FIX #3 : l'état initial (s0) est supprimé des states avant retour afin
-    que len(states) == len(actions) == T, garantissant l'alignement pour le
-    spatial sampling conjoint et l'entraînement des mappers.
+    Collecte (états, actions) ALIGNÉS : states[t] est l'état depuis lequel
+    actions[t] a été choisie.  len(states) == len(actions) == T garantit
+    que spatial_sampling_aligned peut être appliqué sans désalignement.
     """
     if not both_close_to_target(env2, env3, start_target, tol):
         ok, _ = wait_until_both_close(
@@ -120,8 +107,6 @@ def record_one_segment(env2, env3, start_target, end_target,
     arm_size2 = env2.arm_obs_size
     arm_size3 = env3.arm_obs_size
 
-    # On stocke l'état COURANT avant d'agir, puis l'action prise depuis cet état.
-    # Résultat : states[t] ↔ actions[t]  pour tout t.
     states2  = []
     states3  = []
     actions2 = []
@@ -134,14 +119,12 @@ def record_one_segment(env2, env3, start_target, end_target,
     steps    = 0
 
     while steps < max_steps and not (reached2 and reached3):
-        # Snapshot de l'état AVANT d'agir
         obs2_cur = env2._get_obs()
         obs3_cur = env3._get_obs()
 
         act2 = predict_action(policy2, vecnorm2, obs2_cur) if not reached2 else None
         act3 = predict_action(policy3, vecnorm3, obs3_cur) if not reached3 else None
 
-        # Enregistrement (état, action) alignés
         if not reached2:
             states2.append(obs2_cur[:arm_size2].copy())
             actions2.append(act2.copy())
@@ -152,11 +135,9 @@ def record_one_segment(env2, env3, start_target, end_target,
             actions3.append(act3.copy())
             ee3_list.append(get_ee(env3).copy())
 
-        # Application des actions
         env2.step(act2 if act2 is not None else np.zeros(2))
         env3.step(act3 if act3 is not None else np.zeros(3))
 
-        # Test de convergence sur l'effecteur APRÈS le pas
         if not reached2 and np.linalg.norm(get_ee(env2) - end_target) < tol:
             reached2 = True
         if not reached3 and np.linalg.norm(get_ee(env3) - end_target) < tol:
@@ -166,20 +147,20 @@ def record_one_segment(env2, env3, start_target, end_target,
 
     success = reached2 and reached3
     info = {
-        "steps":      steps,
-        "dist2_final": np.linalg.norm(get_ee(env2) - end_target),
-        "dist3_final": np.linalg.norm(get_ee(env3) - end_target),
-        "reached2":   reached2,
-        "reached3":   reached3,
+        "steps":       steps,
+        "dist2_final": float(np.linalg.norm(get_ee(env2) - end_target)),
+        "dist3_final": float(np.linalg.norm(get_ee(env3) - end_target)),
+        "reached2":    reached2,
+        "reached3":    reached3,
     }
 
     if not success or len(actions2) == 0 or len(actions3) == 0:
         return None, None, None, None, None, None, False, info
 
-    states2  = np.array(states2,  dtype=np.float32)   # (T, 6)
-    states3  = np.array(states3,  dtype=np.float32)   # (T, 8)
-    actions2 = np.array(actions2, dtype=np.float32)   # (T, 2)
-    actions3 = np.array(actions3, dtype=np.float32)   # (T, 3)
+    states2  = np.array(states2,  dtype=np.float32)
+    states3  = np.array(states3,  dtype=np.float32)
+    actions2 = np.array(actions2, dtype=np.float32)
+    actions3 = np.array(actions3, dtype=np.float32)
     ee2_arr  = np.array(ee2_list, dtype=np.float32)
     ee3_arr  = np.array(ee3_list, dtype=np.float32)
 
@@ -187,24 +168,24 @@ def record_one_segment(env2, env3, start_target, end_target,
 
 
 # =========================================================
-# Génération principale – AVEC SPATIAL SAMPLING ALIGNÉ
+# Génération principale
 # =========================================================
 
 def main():
-    NUM_SAMPLES          = 50
-    N_SEGMENTS_TARGET    = 100_000
-    TARGETS_PER_EPISODE  = 30
+    NUM_SAMPLES           = 50
+    N_SEGMENTS_TARGET     = 10_000
+    TARGETS_PER_EPISODE   = 30
     MAX_STEPS_PER_SEGMENT = 60
-    TOLERANCE            = 0.2
-    WAIT_MAX_STEPS       = 500
-    TARGET_SCALE         = 0.98
+    TOLERANCE             = 0.2
+    WAIT_MAX_STEPS        = 500
+    TARGET_SCALE          = 0.98
 
     data_dir  = Path("./data/DIRECT")
     data_dir.mkdir(parents=True, exist_ok=True)
     traj_path = data_dir / "trajectories_aligned_ss.pkl"
 
-    run_id_2dof = 1
-    run_id_3dof = 1
+    run_id_2dof  = 1
+    run_id_3dof  = 1
     MODEL_2DOF   = f"./models/ppo_reach_2dof_{run_id_2dof}/best_model.zip"
     VECNORM_2DOF = f"./models/ppo_reach_2dof_{run_id_2dof}/vec_normalize.pkl"
     MODEL_3DOF   = f"./models/ppo_reach_3dof_{run_id_3dof}/best_model.zip"
@@ -219,10 +200,8 @@ def main():
     policy2, vecnorm2, _ = load_policy_and_vecnorm(MODEL_2DOF, VECNORM_2DOF, make_2dof, device)
     policy3, vecnorm3, _ = load_policy_and_vecnorm(MODEL_3DOF, VECNORM_3DOF, make_3dof, device)
 
-    # FIX #7 : pas besoin d'instancier les envs juste pour max_reach
-    # 2DoF : l1=1.5, l2=1.5 → 3.0 | 3DoF : l1=l2=l3=1.0 → 3.0
+    # 2DoF : l1=l2=1.5 → max_reach=3.0 | 3DoF : l1=l2=l3=1.0 → max_reach=3.0
     max_reach = 3.0
-
     rng = np.random.RandomState(42)
 
     all_segments_s2 = []
@@ -234,7 +213,7 @@ def main():
     start_time     = time.time()
     episode        = 0
 
-    pbar = tqdm(total=N_SEGMENTS_TARGET, desc="Valid segments (SS aligné)", unit="seg")
+    pbar = tqdm(total=N_SEGMENTS_TARGET, desc="Valid segments", unit="seg")
 
     while valid_segments < N_SEGMENTS_TARGET:
         episode += 1
@@ -261,27 +240,26 @@ def main():
             max_steps=WAIT_MAX_STEPS, tol=TOLERANCE,
         )
         if not ok:
-            print(f"Épisode {episode} échoué (première cible)")
-            env2.close()
-            env3.close()
+            env2.close(); env3.close()
             continue
 
         for i in range(len(targets) - 1):
-            start_tgt = targets[i]
-            end_tgt   = targets[i + 1]
-
             s2, s3, ee2, ee3, a2, a3, success, info = record_one_segment(
-                env2, env3, start_tgt, end_tgt,
+                env2, env3, targets[i], targets[i + 1],
                 policy2, vecnorm2, policy3, vecnorm3,
                 max_steps=MAX_STEPS_PER_SEGMENT, tol=TOLERANCE,
             )
             if not success:
                 continue
 
-            # FIX #3 : spatial sampling CONJOINT sur (states, actions) pour
-            # préserver l'alignement (s_t, a_t) après rééchantillonnage.
+            # Spatial sampling CONJOINT → alignement (s_t, a_t) préservé
             s2_ss, a2_ss = spatial_sampling_aligned(s2, a2, NUM_SAMPLES)
             s3_ss, a3_ss = spatial_sampling_aligned(s3, a3, NUM_SAMPLES)
+
+            # Vérification de santé avant stockage
+            if (np.any(np.isnan(s2_ss)) or np.any(np.isnan(s3_ss))
+                    or np.any(np.isnan(a2_ss)) or np.any(np.isnan(a3_ss))):
+                continue   # écarte le segment corrompu sans planter
 
             all_segments_s2.append(s2_ss)
             all_segments_s3.append(s3_ss)
@@ -290,10 +268,8 @@ def main():
 
             valid_segments += 1
             pbar.update(1)
-
             elapsed = time.time() - start_time
-            rate    = valid_segments / elapsed if elapsed > 0 else 0
-            pbar.set_postfix({"rate": f"{rate:.2f} seg/s"})
+            pbar.set_postfix({"rate": f"{valid_segments/elapsed:.2f} seg/s"})
 
             if valid_segments >= N_SEGMENTS_TARGET:
                 break
@@ -308,7 +284,7 @@ def main():
     segments_a2 = np.stack(all_segments_a2, axis=0)  # (N, L, 2)
     segments_a3 = np.stack(all_segments_a3, axis=0)  # (N, L, 3)
 
-    print(f"\nGenerated {len(segments_s2)} segments of length {NUM_SAMPLES} each.")
+    print(f"\nGenerated {len(segments_s2)} segments of length {NUM_SAMPLES}.")
     print(f"Total pas de temps : {segments_s2.shape[0] * segments_s2.shape[1]}")
 
     trajectories = {
@@ -324,7 +300,7 @@ def main():
     }
     with open(traj_path, 'wb') as f:
         pickle.dump(trajectories, f)
-    print(f"\nSaved → {traj_path}")
+    print(f"Saved → {traj_path}")
 
 
 if __name__ == "__main__":

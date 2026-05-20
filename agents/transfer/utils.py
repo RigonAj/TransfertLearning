@@ -1,5 +1,17 @@
 import numpy as np
-from scipy.interpolate import interp1d
+
+
+def _make_strictly_increasing(cum_dist: np.ndarray) -> np.ndarray:
+    """
+    Garantit que cum_dist est strictement croissant en ajoutant un epsilon
+    cumulatif aux doublons.  Nécessaire pour np.interp et interp1d.
+    """
+    out = cum_dist.copy()
+    eps = 1e-8
+    for i in range(1, len(out)):
+        if out[i] <= out[i - 1]:
+            out[i] = out[i - 1] + eps
+    return out
 
 
 def spatial_sampling(trajectory: np.ndarray, num_samples: int = 50) -> np.ndarray:
@@ -7,25 +19,26 @@ def spatial_sampling(trajectory: np.ndarray, num_samples: int = 50) -> np.ndarra
     Ré-échantillonne une trajectoire (T, D) en num_samples points espacés
     régulièrement en distance curviligne (arc-length).
 
-    Fix : gère le cas dégénéré où tous les points sont identiques
-    (total_dist ≈ 0) en renvoyant un sous-échantillonnage uniforme en temps.
+    Fixes :
+      - trajectoire dégénérée (total_dist ≈ 0) → sous-échantillonnage uniforme
+      - cum_dist avec doublons (bras immobile) → rendu strictement croissant
+        avant interpolation, sinon np.interp produit des NaN silencieux
     """
-    diffs = np.diff(trajectory, axis=0)
-    dists = np.linalg.norm(diffs, axis=1)
-    cum_dist = np.insert(np.cumsum(dists), 0, 0)
+    diffs    = np.diff(trajectory, axis=0)
+    dists    = np.linalg.norm(diffs, axis=1)
+    cum_dist = np.insert(np.cumsum(dists), 0, 0.0)
     total_dist = cum_dist[-1]
 
-    # --- Cas dégénéré : trajectoire plate ---
     if total_dist < 1e-9:
         idx = np.round(np.linspace(0, len(trajectory) - 1, num_samples)).astype(int)
         return trajectory[idx].astype(np.float32)
 
-    new_cum_dist = np.linspace(0, total_dist, num_samples)
+    cum_dist_strict = _make_strictly_increasing(cum_dist)
+    target_dists    = np.linspace(0.0, cum_dist_strict[-1], num_samples)
+
     new_traj = np.zeros((num_samples, trajectory.shape[1]), dtype=np.float32)
     for d in range(trajectory.shape[1]):
-        interp = interp1d(cum_dist, trajectory[:, d], kind='linear',
-                          fill_value='extrapolate')
-        new_traj[:, d] = interp(new_cum_dist)
+        new_traj[:, d] = np.interp(target_dists, cum_dist_strict, trajectory[:, d])
     return new_traj
 
 
@@ -36,43 +49,41 @@ def spatial_sampling_aligned(states: np.ndarray, actions: np.ndarray,
     num_samples points, en utilisant la paramétrisation arc-length calculée
     sur les STATES uniquement.
 
-    Cela garantit que le point rééchantillonné states[i] correspond bien au
-    point rééchantillonné actions[i], préservant l'alignement temporel
-    (état_t, action_t) indispensable pour l'entraînement du mapper.
+    Cela garantit que states_ss[i] correspond bien à actions_ss[i], préservant
+    l'alignement temporel (état_t, action_t) indispensable pour l'entraînement
+    du mapper.
 
-    Précondition : len(states) == len(actions)  (après trim dans record_one_segment)
+    Précondition : len(states) == len(actions)
 
-    Retourne : (states_ss, actions_ss)  toutes deux de shape (num_samples, .)
+    Fix critique : cum_dist rendu strictement croissant avant np.interp
+    pour éviter les NaN silencieux quand le bras est immobile.
     """
     assert len(states) == len(actions), (
         f"states ({len(states)}) et actions ({len(actions)}) doivent avoir "
-        "le même nombre de lignes après alignement."
+        "le même nombre de lignes."
     )
 
-    # Arc-length calculé depuis l'espace des états
-    diffs = np.diff(states, axis=0)
-    dists = np.linalg.norm(diffs, axis=1)
-    cum_dist = np.insert(np.cumsum(dists), 0, 0)
+    diffs    = np.diff(states, axis=0)
+    dists    = np.linalg.norm(diffs, axis=1)
+    cum_dist = np.insert(np.cumsum(dists), 0, 0.0)
     total_dist = cum_dist[-1]
 
-    # --- Cas dégénéré ---
+    # Cas dégénéré : trajectoire plate
     if total_dist < 1e-9:
         idx = np.round(np.linspace(0, len(states) - 1, num_samples)).astype(int)
         return states[idx].astype(np.float32), actions[idx].astype(np.float32)
 
-    target_dists = np.linspace(0, total_dist, num_samples)
+    # Rendre cum_dist strictement croissant (doublons = bras immobile)
+    cum_dist_strict = _make_strictly_increasing(cum_dist)
+    target_dists    = np.linspace(0.0, cum_dist_strict[-1], num_samples)
 
     states_out  = np.zeros((num_samples, states.shape[1]),  dtype=np.float32)
     actions_out = np.zeros((num_samples, actions.shape[1]), dtype=np.float32)
 
     for d in range(states.shape[1]):
-        interp = interp1d(cum_dist, states[:, d], kind='linear',
-                          fill_value='extrapolate')
-        states_out[:, d] = interp(target_dists)
+        states_out[:, d] = np.interp(target_dists, cum_dist_strict, states[:, d])
 
     for d in range(actions.shape[1]):
-        interp = interp1d(cum_dist, actions[:, d], kind='linear',
-                          fill_value='extrapolate')
-        actions_out[:, d] = interp(target_dists)
+        actions_out[:, d] = np.interp(target_dists, cum_dist_strict, actions[:, d])
 
     return states_out, actions_out

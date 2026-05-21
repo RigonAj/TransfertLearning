@@ -1,0 +1,21 @@
+
+# activate venv
+source .venv/bin/activate
+
+# tensorboard
+tensorboard --logdir data/UNN
+
+
+# 1. Générer les trajectoires appariées (nécessite des politiques PPO déjà entraînées)
+python -m unn.train.trajectories_unn
+
+# 2. Entraîner les action mappers (2DoF et 3DoF)
+python -m unn.train.train_action_mappers
+
+# 3. Entraîner les politiques UNN dans l’espace latent cartésien
+python -m unn.train.train_unn_pushball_2dof
+python -m unn.train.train_unn_pushball_3dof
+
+# 4. Tester les transferts
+python -m unn.tests.transfer_pushball_2to3dof
+python -m unn.tests.transfer_pushball_3to2dof

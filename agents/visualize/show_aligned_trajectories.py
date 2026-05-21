@@ -48,10 +48,8 @@ def predict(model, vec_norm, raw_obs):
 
 def override_target(env, target):
     """Change la cible et réinitialise proprement le flag persistant."""
-    # Réinitialisation explicite du flag (sécurité)
     if hasattr(env, '_target_reached'):
         env._target_reached = False
-    # Utiliser la méthode set_target si elle existe (elle fait déjà le travail)
     if hasattr(env, 'set_target'):
         env.set_target(target)
     else:
@@ -156,7 +154,7 @@ def main():
     parser.add_argument("--pair", type=int, default=1, help="Seed pour la séquence de cibles (paire)")
     parser.add_argument("--delay", type=float, default=0.04)
     parser.add_argument("--n_targets", type=int, default=10, help="Nombre de cibles dans la séquence")
-    parser.add_argument("--steps_per_target", type=int, default=50, help="Steps max par cible")
+    parser.add_argument("--steps_per_target", type=int, default=50, help="Nombre max de steps par cible avant timeout")
     parser.add_argument("--min_dist", type=float, default=0.1, help="Distance minimale entre cibles consécutives")
     args = parser.parse_args()
 
@@ -199,6 +197,16 @@ def main():
     success_2 = False
     success_3 = False
 
+    # Pour chaque cible, on va enregistrer le step où les deux bras ont atteint
+    # On initialise avec -1 pour indiquer non atteint
+    steps_to_both_reach = []  # liste pour chaque cible (commence à l'index 1 ?)
+    # On va stocker pour chaque cible sauf la première ? On peut tout stocker mais la première cible est déjà en cours.
+    # On va gérer le moment où les deux deviennent True.
+
+    # Pour la cible courante, on note le step d'atteinte du premier et du second
+    first_reach_step = None
+    both_reached = False
+
     total_steps = n_targets * args.steps_per_target
 
     for global_step in range(total_steps):
@@ -206,17 +214,52 @@ def main():
             print("Fermeture fenêtre")
             break
 
+        # Vérifier si les deux bras ont atteint la cible courante
+        current_reached_2 = info2.get("target_reached", False) if 'info2' in locals() else False
+        current_reached_3 = info3.get("target_reached", False) if 'info3' in locals() else False
+        # Mettre à jour les flags de succès
+        if current_reached_2:
+            success_2 = True
+        if current_reached_3:
+            success_3 = True
+
+        # Si les deux ne sont pas encore atteints, on enregistre le premier atteint
+        if not both_reached:
+            if success_2 and success_3:
+                # Les deux viennent d'atteindre (peut-être au même step ou l'un après l'autre)
+                # Le step actuel est step_in_tgt (nombre de steps depuis le début de cette cible)
+                both_reached = True
+                steps_to_both_reach.append(step_in_tgt)  # on garde le step où le dernier a atteint
+            else:
+                # Si un seul a atteint, on note le step du premier (si pas déjà fait)
+                if (success_2 or success_3) and first_reach_step is None:
+                    first_reach_step = step_in_tgt
+
         # Changement de cible si nécessaire
-        if step_in_tgt >= args.steps_per_target and target_idx < n_targets-1:
-            if target_idx > 0:
-                status = "valid" if (success_2 and success_3) else "invalid"
-                print(f"  Segment {target_idx} : {status}  (cible {target_idx} → {target_idx+1})")
-            target_idx += 1
-            step_in_tgt = 0
-            override_target(env_2, targets[target_idx])
-            override_target(env_3, targets[target_idx])
-            success_2 = False
-            success_3 = False
+        # Soit on dépasse steps_per_target, soit les deux ont atteint (on change immédiatement)
+        if (step_in_tgt >= args.steps_per_target) or both_reached:
+            if target_idx < n_targets - 1:
+                # Afficher les infos pour le segment qui se termine
+                if both_reached:
+                    status = "valid"
+                    steps_needed = steps_to_both_reach[-1]  # le step où le dernier a atteint
+                else:
+                    status = "timeout"
+                    steps_needed = args.steps_per_target  # max steps sans atteinte
+                print(f"  Segment {target_idx} : {status}  (cible {target_idx} → {target_idx+1})  |  steps required = {steps_needed}")
+
+                # Passer à la cible suivante
+                target_idx += 1
+                step_in_tgt = 0
+                override_target(env_2, targets[target_idx])
+                override_target(env_3, targets[target_idx])
+                success_2 = False
+                success_3 = False
+                both_reached = False
+                first_reach_step = None
+            else:
+                # Dernière cible, on ne change pas
+                pass
 
         # Actions
         act_2 = predict(model_2, vn_2, env_2._get_obs())
@@ -224,6 +267,7 @@ def main():
         obs_2, _, term2, trunc2, info2 = env_2.step(act_2)
         obs_3, _, term3, trunc3, info3 = env_3.step(act_3)
 
+        # Mettre à jour les flags de succès après step (info contient target_reached)
         if info2.get("target_reached", False):
             success_2 = True
         if info3.get("target_reached", False):
@@ -246,17 +290,16 @@ def main():
         fig.canvas.flush_events()
         time.sleep(args.delay)
 
-        '''
-        if step_count % (args.steps_per_target * 5) == 0:
-            d2 = np.linalg.norm(env_2.forward_kinematics(env_2.theta1, env_2.theta2) - targets[target_idx])
-            d3 = np.linalg.norm(env_3.forward_kinematics(env_3.theta1, env_3.theta2, env_3.theta3) - targets[target_idx])
-            print(f"  step {step_count:4d} | target {target_idx+1:3d}/{n_targets} | dist 2={d2:.3f}  3={d3:.3f}")
-        '''
-
-    # Dernier segment
-    if n_targets > 1:
-        status = "valid" if (success_2 and success_3) else "invalid"
-        print(f"  Segment {n_targets-1} : {status}  (cible {n_targets-1} → {n_targets})")
+    # Dernier segment (cible n_targets-1)
+    if target_idx == n_targets - 1:
+        # On évalue si les deux ont atteint avant la fin de la boucle
+        if both_reached:
+            status = "valid"
+            steps_needed = steps_to_both_reach[-1] if steps_to_both_reach else step_in_tgt
+        else:
+            status = "timeout" if step_in_tgt >= args.steps_per_target else "interrupted"
+            steps_needed = step_in_tgt
+        print(f"  Segment {target_idx} : {status}  (cible {target_idx} → {target_idx+1})  |  steps required = {steps_needed}")
 
     plt.ioff()
     plt.show()

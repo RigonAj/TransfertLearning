@@ -10,7 +10,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from envs.env_continuous_reaching_2dof import Arm2DoFPersistentEnv
 from envs.env_continuous_reaching_3dof import Arm3DoFPersistentEnv
-from transfer.utils import spatial_sampling_aligned   # FIX #1 : import corrigé
+from .utils import spatial_sampling_aligned
 
 import torch
 torch.set_num_threads(4)
@@ -173,7 +173,7 @@ def record_one_segment(env2, env3, start_target, end_target,
 
 def main():
     NUM_SAMPLES           = 50
-    N_SEGMENTS_TARGET     = 10_000
+    N_SEGMENTS_TARGET     = 50_000
     TARGETS_PER_EPISODE   = 30
     MAX_STEPS_PER_SEGMENT = 60
     TOLERANCE             = 0.2

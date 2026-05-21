@@ -14,7 +14,7 @@ from agents.transfer.mapper_models import StateMapperMLP, ActionMapperMLP
 
 class ReachingTransfer2to3:
     def __init__(self, policy_2dof_path: str, vecnorm_2dof_path: str,
-                 state_mapper_path: str, action_mapper_path: str, device="cpu"):
+                 mapper_path: str, device="cpu"):
         self.device = device
 
         self.policy_2dof = PPO.load(policy_2dof_path, device=device)
@@ -26,13 +26,14 @@ class ReachingTransfer2to3:
         self.vec_norm_2dof.norm_reward = False
         venv.close()
 
-        # Mappers
+        # Chargement des mappers depuis le fichier unique
+        checkpoint = torch.load(mapper_path, map_location=device)
         self.state_mapper = StateMapperMLP(8, 6).to(device)
-        self.state_mapper.load_state_dict(torch.load(state_mapper_path, map_location=device))
+        self.state_mapper.load_state_dict(checkpoint["state_mapper"])
         self.state_mapper.eval()
 
         self.action_mapper = ActionMapperMLP(6, 2, 3).to(device)
-        self.action_mapper.load_state_dict(torch.load(action_mapper_path, map_location=device))
+        self.action_mapper.load_state_dict(checkpoint["action_mapper"])
         self.action_mapper.eval()
 
         print("✅ Reaching Transfer 2→3 loaded successfully")
@@ -61,13 +62,11 @@ class ReachingTransfer2to3:
 
 
 def main():
-    # ==================== CONFIG ====================
     POLICY_2DOF   = "./models/ppo_reach_2dof_1/best_model.zip"
     VECNORM_2DOF  = "./models/ppo_reach_2dof_1/vec_normalize.pkl"
-    STATE_MAPPER  = "./data/DIRECT/transfer_2to3.pt"
-    ACTION_MAPPER = "./data/DIRECT/action_mapper_2to3dof.pt"
+    MAPPER_PATH   = "./data/DIRECT/transfer_2to3_seq.pt"
 
-    transfer = ReachingTransfer2to3(POLICY_2DOF, VECNORM_2DOF, STATE_MAPPER, ACTION_MAPPER)
+    transfer = ReachingTransfer2to3(POLICY_2DOF, VECNORM_2DOF, MAPPER_PATH)
 
     env = DummyVecEnv([lambda: Monitor(ReachingEnv_3dof(render_mode=None))])
     n_episodes = 500

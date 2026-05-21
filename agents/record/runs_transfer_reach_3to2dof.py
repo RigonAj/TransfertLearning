@@ -12,16 +12,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 
 from envs.env_reaching_2dof import ReachingEnv_2dof
-from agents.test.transfer_reaching_3to2dof import TransferPolicy
+from agents.test.transfer_reaching_3to2dof import ReachingTransfer3to2
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 RUN_ID_3DOF      = 1
-SAVE_TRANSFER_ID = 1
 
 POLICY_3DOF_PATH  = f"./models/ppo_reach_3dof_{RUN_ID_3DOF}/best_model.zip"
 VECNORM_3DOF_PATH = f"./models/ppo_reach_3dof_{RUN_ID_3DOF}/vec_normalize.pkl"
-STATE_MAPPER_PATH  = "./data/DIRECT/state_mapper_2to3dof.pt"   # 6 → 8
-ACTION_MAPPER_PATH = "./data/DIRECT/action_mapper_3to2dof.pt"  # (8+3)→2
+MAPPER_PATH       = "./data/DIRECT/transfer_3to2_seq.pt"
 
 N_TARGET  = 20
 MAX_STEPS = 100
@@ -32,11 +30,10 @@ os.makedirs(SAVE_SUCCESS, exist_ok=True)
 os.makedirs(SAVE_FAIL,    exist_ok=True)
 
 # ── Chargement politique de transfert ─────────────────────────────────────────
-policy = TransferPolicy(
+policy = ReachingTransfer3to2(
     policy_3dof_path  = POLICY_3DOF_PATH,
     vecnorm_3dof_path = VECNORM_3DOF_PATH,
-    state_mapper_path  = STATE_MAPPER_PATH,
-    action_mapper_path = ACTION_MAPPER_PATH,
+    mapper_path       = MAPPER_PATH,
     device = "cpu",
 )
 

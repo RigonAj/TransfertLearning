@@ -14,7 +14,7 @@ from agents.transfer.mapper_models import StateMapperMLP, ActionMapperMLP
 
 class PushBallTransfer3to2:
     def __init__(self, policy_3dof_path: str, vecnorm_3dof_path: str,
-                 state_mapper_path: str, action_mapper_path: str, device="cpu"):
+                 mapper_path: str, device="cpu"):
         self.device = device
 
         self.policy_3dof = PPO.load(policy_3dof_path, device=device)
@@ -26,13 +26,14 @@ class PushBallTransfer3to2:
         self.vec_norm_3dof.norm_reward = False
         venv.close()
 
-        # Mappers 3→2
-        self.state_mapper = StateMapperMLP(6, 8).to(device)      # 2→3 obs
-        self.state_mapper.load_state_dict(torch.load(state_mapper_path, map_location=device))
+        # Chargement des mappers depuis le fichier unique
+        checkpoint = torch.load(mapper_path, map_location=device)
+        self.state_mapper = StateMapperMLP(6, 8).to(device)
+        self.state_mapper.load_state_dict(checkpoint["state_mapper"])
         self.state_mapper.eval()
 
-        self.action_mapper = ActionMapperMLP(8, 3, 2).to(device) # 3obs + 3act → 2act
-        self.action_mapper.load_state_dict(torch.load(action_mapper_path, map_location=device))
+        self.action_mapper = ActionMapperMLP(8, 3, 2).to(device)
+        self.action_mapper.load_state_dict(checkpoint["action_mapper"])
         self.action_mapper.eval()
 
         print("✅ PushBall Transfer 3→2 loaded successfully")
@@ -45,18 +46,14 @@ class PushBallTransfer3to2:
         arm_2 = obs_2dof[:, :6]
         task = obs_2dof[:, 6:]   # 4D task for pushball
 
-        # 2DoF arm → 3DoF arm equivalent
         arm_3 = self.state_mapper(torch.from_numpy(arm_2).float().to(self.device))
         arm_3 = arm_3.cpu().numpy()
 
-        # Reconstruct full 3DoF observation
         full_obs_3 = np.concatenate([arm_3, task], axis=1)
         norm_obs = self.vec_norm_3dof.normalize_obs(full_obs_3)
 
-        # Get 3DoF action
         act_3, _ = self.policy_3dof.predict(norm_obs, deterministic=True)
 
-        # Map to 2DoF action
         act_2 = self.action_mapper(
             torch.from_numpy(arm_3).float().to(self.device),
             torch.from_numpy(act_3).float().to(self.device)
@@ -65,13 +62,11 @@ class PushBallTransfer3to2:
 
 
 def main():
-    # ==================== CONFIG ====================
     POLICY_3DOF   = "./models/ppo_pushball_3dof_1/best_model.zip"
     VECNORM_3DOF  = "./models/ppo_pushball_3dof_1/vec_normalize.pkl"
-    STATE_MAPPER  = "./data/DIRECT/transfer_3to2.pt"
-    ACTION_MAPPER = "./data/DIRECT/action_mapper_3to2dof.pt"
+    MAPPER_PATH   = "./data/DIRECT/transfer_3to2_seq.pt"
 
-    transfer = PushBallTransfer3to2(POLICY_3DOF, VECNORM_3DOF, STATE_MAPPER, ACTION_MAPPER)
+    transfer = PushBallTransfer3to2(POLICY_3DOF, VECNORM_3DOF, MAPPER_PATH)
 
     env = DummyVecEnv([lambda: Monitor(PushBallEnv_2dof(render_mode=None))])
     n_episodes = 500

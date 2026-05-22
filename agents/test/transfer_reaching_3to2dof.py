@@ -47,15 +47,36 @@ class ReachingTransfer3to2:
 
         print("✅ Reaching Transfer 3→2 loaded successfully")
 
+    def _extract_temporal_features(self, arm_state_2dof: np.ndarray) -> np.ndarray:
+        """
+        Extrait les features temporelles (velocities) à partir de l'état courant
+        et les combine avec les features spatiales pour former l'entrée du mapper.
+        """
+        # arm_state_2dof: [θ1, θ2, dθ1, dθ2, eff_x, eff_y] (6 dims)
+        
+        # Features spatiales (angles et position)
+        spatial = arm_state_2dof.copy()
+        
+        # Features temporelles (velocities)
+        temporal = arm_state_2dof.copy()
+        
+        # Concaténer spatial et temporal pour former l'entrée du mapper (12 dims)
+        combined = np.concatenate([spatial, temporal], axis=-1)
+        return combined
+
     @torch.no_grad()
     def predict(self, obs_2dof: np.ndarray) -> np.ndarray:
         if obs_2dof.ndim == 1:
             obs_2dof = obs_2dof.reshape(1, -1)
 
-        arm_2 = obs_2dof[:, :6]
-        task = obs_2dof[:, 6:]   # 5D task for reaching
+        arm_2 = obs_2dof[:, :6]      # 6D arm state
+        task = obs_2dof[:, 6:]       # 5D task for reaching
 
-        arm_3 = self.state_mapper(torch.from_numpy(arm_2).float().to(self.device))
+        # Construire l'entrée combinée spatiale + temporelle pour le state mapper
+        # Le mapper attend 12 dims (6 spatial + 6 temporal)
+        arm_2_combined = self._extract_temporal_features(arm_2)
+
+        arm_3 = self.state_mapper(torch.from_numpy(arm_2_combined).float().to(self.device))
         arm_3 = project_mapped_arm_state_to_reference(
             arm_3.cpu().numpy(),
             reference_arm_state=arm_2,
@@ -66,8 +87,9 @@ class ReachingTransfer3to2:
 
         act_3, _ = self.policy_3dof.predict(norm_obs, deterministic=True)
 
+        # Pour l'action mapper, on utilise également l'entrée combinée
         act_2 = self.action_mapper(
-            torch.from_numpy(arm_2).float().to(self.device),
+            torch.from_numpy(arm_2_combined).float().to(self.device),
             torch.from_numpy(act_3).float().to(self.device)
         )
         return act_2.cpu().numpy()[0]

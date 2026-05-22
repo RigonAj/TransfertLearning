@@ -63,7 +63,7 @@ while n_success < N_TARGET or n_fail < N_TARGET:
 
     while not done:
         action_3dof = policy.predict(obs[0])
-        obs, reward, dones, infos = env.step(action_3dof)
+        obs, reward, dones, infos = env.step([action_3dof])
 
         thetas.append([inner.theta1, inner.theta2, inner.theta3])
         rewards.append(float(reward[0]))

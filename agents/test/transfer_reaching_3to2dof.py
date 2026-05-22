@@ -1,7 +1,12 @@
+import argparse
 import numpy as np
+import os
 import torch
 from pathlib import Path
 from tqdm import tqdm
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path(".cache/matplotlib").resolve()))
+Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
@@ -9,7 +14,11 @@ from stable_baselines3.common.monitor import Monitor
 
 from envs.env_reaching_2dof import ReachingEnv_2dof
 from envs.env_reaching_3dof import ReachingEnv_3dof
-from agents.transfer.mapper_models import StateMapperMLP, ActionMapperMLP
+from agents.transfer.mapper_models import (
+    StateMapperMLP,
+    ActionMapperMLP,
+    project_mapped_arm_state_to_reference,
+)
 
 
 class ReachingTransfer3to2:
@@ -32,7 +41,7 @@ class ReachingTransfer3to2:
         self.state_mapper.load_state_dict(checkpoint["state_mapper"])
         self.state_mapper.eval()
 
-        self.action_mapper = ActionMapperMLP(8, 3, 2).to(device)
+        self.action_mapper = ActionMapperMLP(6, 3, 2).to(device)
         self.action_mapper.load_state_dict(checkpoint["action_mapper"])
         self.action_mapper.eval()
 
@@ -47,7 +56,10 @@ class ReachingTransfer3to2:
         task = obs_2dof[:, 6:]   # 5D task for reaching
 
         arm_3 = self.state_mapper(torch.from_numpy(arm_2).float().to(self.device))
-        arm_3 = arm_3.cpu().numpy()
+        arm_3 = project_mapped_arm_state_to_reference(
+            arm_3.cpu().numpy(),
+            reference_arm_state=arm_2,
+        )
 
         full_obs_3 = np.concatenate([arm_3, task], axis=1)
         norm_obs = self.vec_norm_3dof.normalize_obs(full_obs_3)
@@ -55,13 +67,18 @@ class ReachingTransfer3to2:
         act_3, _ = self.policy_3dof.predict(norm_obs, deterministic=True)
 
         act_2 = self.action_mapper(
-            torch.from_numpy(arm_3).float().to(self.device),
+            torch.from_numpy(arm_2).float().to(self.device),
             torch.from_numpy(act_3).float().to(self.device)
         )
-        return act_2.cpu().numpy()
+        return act_2.cpu().numpy()[0]
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Evaluate direct reaching transfer 3DoF -> 2DoF.")
+    parser.add_argument("--episodes", type=int, default=500, help="Number of evaluation episodes.")
+    parser.add_argument("--max-steps", type=int, default=200, help="Maximum steps per episode.")
+    args = parser.parse_args()
+
     POLICY_3DOF   = "./models/ppo_reach_3dof_1/best_model.zip"
     VECNORM_3DOF  = "./models/ppo_reach_3dof_1/vec_normalize.pkl"
     MAPPER_PATH   = "./data/DIRECT/transfer_3to2_seq.pt"
@@ -69,8 +86,8 @@ def main():
     transfer = ReachingTransfer3to2(POLICY_3DOF, VECNORM_3DOF, MAPPER_PATH)
 
     env = DummyVecEnv([lambda: Monitor(ReachingEnv_2dof(render_mode=None))])
-    n_episodes = 500
-    max_steps = 200
+    n_episodes = args.episodes
+    max_steps = args.max_steps
 
     successes = 0
     steps_success = []

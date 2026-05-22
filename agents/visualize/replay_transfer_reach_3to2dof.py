@@ -9,6 +9,10 @@ import argparse
 import glob
 import os
 import time
+from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path(".cache/matplotlib").resolve()))
+Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
 import matplotlib
 matplotlib.use("QtAgg")

@@ -8,10 +8,17 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from typing import Dict
+import os
+import platform
 
-from .mapper_models import StateMapperMLP, ActionMapperMLP
+from .mapper_models import (
+    StateMapperMLP,
+    ActionMapperMLP,
+    arm_effector_fields_torch,
+    rebuild_arm_state_with_fk,
+)
 
-torch.set_num_threads(4)
+# global torch thread count is configured per-run (see `train()`)
 
 
 # =========================================================
@@ -133,8 +140,16 @@ class TransferMapper:
         label="transfer",
     ):
 
+        # normalize device to torch.device
+        if not isinstance(device, torch.device):
+            device = torch.device(device)
+
         self.device = device
         self.label = label
+
+        # AMP scaler if using CUDA
+        self.use_amp = self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda") if self.use_amp else None
 
         self.writer = (
             SummaryWriter(log_dir)
@@ -145,13 +160,43 @@ class TransferMapper:
         self.state_mapper = StateMapperMLP(
             in_state_dim,
             out_state_dim
-        ).to(device)
+        ).to(self.device)
 
         self.action_mapper = ActionMapperMLP(
             in_state_dim,
             in_act_dim,
             out_act_dim
-        ).to(device)
+        ).to(self.device)
+
+        # Optionally try to JIT-compile models with torch.compile (PyTorch 2.x)
+        # Prefer compiling only when the Triton backend is available and
+        # known-working; torch.compile may defer work until first call and
+        # then raise runtime errors (Inductor/Triton missing). To avoid that
+        # surprising failure, check for Triton first and catch compile errors.
+        # Only compile models if explicitly enabled via environment variable.
+        # Automatic compilation can cause runtime failures (Inductor/Triton
+        # backend missing or incompatible). To enable: set
+        # `TORCH_COMPILE=1` in the environment.
+        if hasattr(torch, "compile") and os.environ.get("TORCH_COMPILE", "0") in ("1", "true", "True"):
+            try:
+                # Prefer to check for Triton presence; if it's not available,
+                # skip compilation to avoid Inductor runtime errors.
+                import triton  # type: ignore
+                triton_ok = True
+            except Exception:
+                triton_ok = False
+
+            if triton_ok:
+                try:
+                    self.state_mapper = torch.compile(self.state_mapper)
+                    self.action_mapper = torch.compile(self.action_mapper)
+                    print("[INFO] Models compiled with torch.compile")
+                except Exception as e:
+                    print(f"[WARN] torch.compile failed at compile-time: {e}")
+            else:
+                print("[INFO] torch.compile skipped: Triton not available or disabled")
+        else:
+            print("[INFO] torch.compile disabled (set TORCH_COMPILE=1 to enable)")
 
         self.opt_state = optim.Adam(
             self.state_mapper.parameters(),
@@ -180,6 +225,33 @@ class TransferMapper:
             else 2
         )
 
+    def _state_loss(self, raw_pred_s, s_out_f, s_in_f):
+        """
+        Train the state mapper as a task-agnostic arm mapper.
+
+        Angles/velocities are still guided by the paired source trajectory, but
+        the end-effector is forced toward the real input robot end-effector.
+        This keeps reaching-trained mappers meaningful for later tasks whose
+        observations depend on the current Cartesian arm state.
+        """
+        pred_s = rebuild_arm_state_with_fk(raw_pred_s)
+
+        eff_start = 4 if self.out_state_dim == 6 else 6
+        loss_pose = self.criterion(
+            pred_s[..., :eff_start],
+            s_out_f[..., :eff_start],
+        )
+
+        ref_eff = arm_effector_fields_torch(s_in_f)
+        pred_eff = arm_effector_fields_torch(pred_s)
+        raw_eff = arm_effector_fields_torch(raw_pred_s)
+
+        loss_ref_ee = self.criterion(pred_eff, ref_eff)
+        loss_raw_ee = self.criterion(raw_eff, ref_eff)
+
+        loss = loss_pose + 5.0 * loss_ref_ee + 0.25 * loss_raw_ee
+        return loss, pred_s
+
     # =====================================================
     # TRAIN
     # =====================================================
@@ -191,8 +263,14 @@ class TransferMapper:
         a_in_all,
         a_out_all,
         epochs=1000,
-        batch_size=32,
+        batch_size=1024,
         patience=50,
+        num_workers=None,
+        prefetch_factor=None,
+        pin_memory=None,
+        accumulation_steps=1,
+        dataset_half=False,
+        worker_cap=12,
     ):
 
         N = s_in_all.shape[0]
@@ -221,22 +299,97 @@ class TransferMapper:
             a_out_all,
         )
 
+        # GPU performance settings
+        if self.device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+
+        # compute DataLoader workers and torch threads to avoid oversubscription
+        n_cpus = os.cpu_count() or 1
+        cap = max(1, min(worker_cap, n_cpus - 1))
+
+        if num_workers is not None:
+            n_workers = int(num_workers)
+        else:
+            if platform.system() == "Windows":
+                # Windows: spawn overhead higher — use roughly half logical CPUs
+                n_workers = max(0, min(max(1, n_cpus // 2), cap))
+            else:
+                # Unix-like: use CPUs-1 but cap to `cap`
+                n_workers = max(0, min(n_cpus - 1, cap))
+
+        # threads per process (intra-op) to avoid too many threads when using workers
+        threads_per_worker = max(1, n_cpus // (n_workers + 1))
+
+        # set environment vars for BLAS/OpenMP libraries
+        os.environ.setdefault('OMP_NUM_THREADS', str(threads_per_worker))
+        os.environ.setdefault('OPENBLAS_NUM_THREADS', str(threads_per_worker))
+        os.environ.setdefault('MKL_NUM_THREADS', str(threads_per_worker))
+
+        try:
+            torch.set_num_threads(threads_per_worker)
+        except Exception:
+            pass
+
+        try:
+            # setting interop threads may fail if parallel work already started
+            torch.set_num_interop_threads(1)
+        except Exception:
+            pass
+
+        if pin_memory is None:
+            pin_memory = True if self.device.type == "cuda" else False
+
+        pf = prefetch_factor if prefetch_factor is not None else 4
+
+        # If no workers are used, prefetch_factor must be None (DataLoader validation)
+        if n_workers == 0:
+            if pf is not None:
+                print("[WARN] num_workers==0, overriding prefetch_factor -> None to avoid DataLoader error")
+            pf = None
+
+        print(f"[INFO] DataLoader num_workers={n_workers}, pin_memory={pin_memory}, threads_per_worker={threads_per_worker}, n_cpus={n_cpus}, prefetch_factor={pf}")
+
+        # Optionally convert dataset to half precision to reduce transfer size
+        if dataset_half and self.device.type == "cuda" and self.use_amp:
+            try:
+                full_ds.s_in = full_ds.s_in.half()
+                full_ds.s_out = full_ds.s_out.half()
+                full_ds.a_in = full_ds.a_in.half()
+                full_ds.a_out = full_ds.a_out.half()
+            except Exception:
+                pass
+
+        # Pre-pin dataset tensors (speeds up cuda transfers) when possible
+        if self.device.type == "cuda":
+            try:
+                for name in ('s_in', 's_out', 'a_in', 'a_out'):
+                    t = getattr(full_ds, name)
+                    if isinstance(t, torch.Tensor) and not t.is_pinned():
+                        try:
+                            setattr(full_ds, name, t.pin_memory())
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
         train_dl = DataLoader(
-            torch.utils.data.Subset(
-                full_ds,
-                train_idx
-            ),
+            torch.utils.data.Subset(full_ds, train_idx),
             batch_size=batch_size,
-            shuffle=True
+            shuffle=True,
+            num_workers=n_workers,
+            pin_memory=pin_memory,
+            persistent_workers=(n_workers > 0),
+            prefetch_factor=pf,
         )
 
         val_dl = DataLoader(
-            torch.utils.data.Subset(
-                full_ds,
-                val_idx
-            ),
+            torch.utils.data.Subset(full_ds, val_idx),
             batch_size=batch_size,
-            shuffle=False
+            shuffle=False,
+            num_workers=n_workers,
+            pin_memory=pin_memory,
+            persistent_workers=(n_workers > 0),
+            prefetch_factor=pf,
         )
 
         best_val = np.inf
@@ -259,73 +412,71 @@ class TransferMapper:
             tr_s = 0.0
             tr_a = 0.0
 
-            for s_in, s_out, a_in, a_out in train_dl:
+
+            # initialize grads for accumulation
+            self.opt_state.zero_grad()
+            self.opt_action.zero_grad()
+
+            for batch_idx, (s_in, s_out, a_in, a_out) in enumerate(train_dl):
 
                 B, L, _ = s_in.shape
 
-                s_in_f = (
-                    s_in.reshape(B * L, -1)
-                    .to(self.device)
-                )
+                s_in_f = s_in.reshape(B * L, -1).to(self.device, non_blocking=True)
+                s_out_f = s_out.reshape(B * L, -1).to(self.device, non_blocking=True)
+                a_in_f = a_in.reshape(B * L, -1).to(self.device, non_blocking=True)
+                a_out_f = a_out.reshape(B * L, -1).to(self.device, non_blocking=True)
 
-                s_out_f = (
-                    s_out.reshape(B * L, -1)
-                    .to(self.device)
-                )
+                if self.use_amp:
+                    with torch.amp.autocast("cuda"):
+                        raw_pred_s = self.state_mapper(s_in_f)
+                        loss_s, _ = self._state_loss(raw_pred_s, s_out_f, s_in_f)
+                        pred_a = self.action_mapper(s_in_f, a_in_f)
+                        loss_a = self.criterion(pred_a, a_out_f)
 
-                a_in_f = (
-                    a_in.reshape(B * L, -1)
-                    .to(self.device)
-                )
+                    total_loss = loss_s + loss_a
+                    loss_to_back = total_loss / accumulation_steps
+                    self.scaler.scale(loss_to_back).backward()
 
-                a_out_f = (
-                    a_out.reshape(B * L, -1)
-                    .to(self.device)
-                )
+                else:
+                    raw_pred_s = self.state_mapper(s_in_f)
+                    loss_s, _ = self._state_loss(raw_pred_s, s_out_f, s_in_f)
+                    pred_a = self.action_mapper(s_in_f, a_in_f)
+                    loss_a = self.criterion(pred_a, a_out_f)
 
-                self.opt_state.zero_grad()
-
-                pred_s = self.state_mapper(
-                    s_in_f
-                )
-
-                loss_s = self.criterion(
-                    pred_s,
-                    s_out_f
-                )
-
-                loss_s.backward()
-
-                nn.utils.clip_grad_norm_(
-                    self.state_mapper.parameters(),
-                    1.0
-                )
-
-                self.opt_state.step()
-
-                self.opt_action.zero_grad()
-
-                pred_a = self.action_mapper(
-                    s_in_f,
-                    a_in_f
-                )
-
-                loss_a = self.criterion(
-                    pred_a,
-                    a_out_f
-                )
-
-                loss_a.backward()
-
-                nn.utils.clip_grad_norm_(
-                    self.action_mapper.parameters(),
-                    1.0
-                )
-
-                self.opt_action.step()
+                    total_loss = loss_s + loss_a
+                    (total_loss / accumulation_steps).backward()
 
                 tr_s += loss_s.item()
                 tr_a += loss_a.item()
+
+                # step when we've accumulated enough or at last batch
+                is_last = (batch_idx == len(train_dl) - 1)
+                if ((batch_idx + 1) % accumulation_steps == 0) or is_last:
+                    if self.use_amp:
+                        # unscale before clipping
+                        try:
+                            self.scaler.unscale_(self.opt_state)
+                        except Exception:
+                            pass
+                        nn.utils.clip_grad_norm_(self.state_mapper.parameters(), 1.0)
+                        try:
+                            self.scaler.unscale_(self.opt_action)
+                        except Exception:
+                            pass
+                        nn.utils.clip_grad_norm_(self.action_mapper.parameters(), 1.0)
+
+                        self.scaler.step(self.opt_state)
+                        self.scaler.step(self.opt_action)
+                        self.scaler.update()
+                    else:
+                        nn.utils.clip_grad_norm_(self.state_mapper.parameters(), 1.0)
+                        nn.utils.clip_grad_norm_(self.action_mapper.parameters(), 1.0)
+
+                        self.opt_state.step()
+                        self.opt_action.step()
+
+                    self.opt_state.zero_grad()
+                    self.opt_action.zero_grad()
 
             tr_s /= len(train_dl)
             tr_a /= len(train_dl)
@@ -340,44 +491,29 @@ class TransferMapper:
 
             with torch.no_grad():
 
+
                 for s_in, s_out, a_in, a_out in val_dl:
 
                     B, L, _ = s_in.shape
 
-                    s_in_f = (
-                        s_in.reshape(B * L, -1)
-                        .to(self.device)
-                    )
+                    s_in_f = s_in.reshape(B * L, -1).to(self.device, non_blocking=True)
+                    s_out_f = s_out.reshape(B * L, -1).to(self.device, non_blocking=True)
+                    a_in_f = a_in.reshape(B * L, -1).to(self.device, non_blocking=True)
+                    a_out_f = a_out.reshape(B * L, -1).to(self.device, non_blocking=True)
 
-                    s_out_f = (
-                        s_out.reshape(B * L, -1)
-                        .to(self.device)
-                    )
+                    if self.use_amp:
+                        with torch.amp.autocast("cuda"):
+                            raw_pred_s = self.state_mapper(s_in_f)
+                            loss_s, _ = self._state_loss(raw_pred_s, s_out_f, s_in_f)
 
-                    a_in_f = (
-                        a_in.reshape(B * L, -1)
-                        .to(self.device)
-                    )
+                            val_s += loss_s.item()
+                            val_a += self.criterion(self.action_mapper(s_in_f, a_in_f), a_out_f).item()
+                    else:
+                        raw_pred_s = self.state_mapper(s_in_f)
+                        loss_s, _ = self._state_loss(raw_pred_s, s_out_f, s_in_f)
 
-                    a_out_f = (
-                        a_out.reshape(B * L, -1)
-                        .to(self.device)
-                    )
-
-                    val_s += self.criterion(
-                        self.state_mapper(
-                            s_in_f
-                        ),
-                        s_out_f
-                    ).item()
-
-                    val_a += self.criterion(
-                        self.action_mapper(
-                            s_in_f,
-                            a_in_f
-                        ),
-                        a_out_f
-                    ).item()
+                        val_s += loss_s.item()
+                        val_a += self.criterion(self.action_mapper(s_in_f, a_in_f), a_out_f).item()
 
             val_s /= len(val_dl)
             val_a /= len(val_dl)
@@ -470,115 +606,58 @@ class TransferMapper:
         n_samples=200
     ):
 
-        n = min(
-            n_samples,
-            len(s_in_all)
-        )
+        n = min(n_samples, len(s_in_all))
 
-        idx = np.random.choice(
-            len(s_in_all),
-            n,
-            replace=False
-        )
+        if n == 0:
+            return {"action_mse": 0.0, "ee_error": 0.0, "full_mse": 0.0}
 
-        action_mse = 0.0
-        ee_error = 0.0
-        full_mse = 0.0
+        idx = np.random.choice(len(s_in_all), n, replace=False)
+
+        # Move the selected validation samples to device in a single batch
+        s_in_batch = torch.from_numpy(s_in_all[idx]).float().to(self.device, non_blocking=True)
+        a_in_batch = torch.from_numpy(a_in_all[idx]).float().to(self.device, non_blocking=True)
+        s_out_gt_batch = torch.from_numpy(s_out_all[idx]).float().to(self.device, non_blocking=True)
+        a_out_gt_batch = torch.from_numpy(a_out_all[idx]).float().to(self.device, non_blocking=True)
+
+        B = s_in_batch.shape[0]
+        L = s_in_batch.shape[1]
+
+        # Flatten time dimension for the model forward passes
+        s_in_f = s_in_batch.reshape(B * L, -1)
+        a_in_f = a_in_batch.reshape(B * L, -1)
+        s_out_gt_f = s_out_gt_batch.reshape(B * L, -1)
+        a_out_gt_f = a_out_gt_batch.reshape(B * L, -1)
 
         self.state_mapper.eval()
         self.action_mapper.eval()
 
-        for i in idx:
+        # Forward all at once
+        s_out_pred_f = rebuild_arm_state_with_fk(self.state_mapper(s_in_f))
+        a_out_pred_f = self.action_mapper(s_in_f, a_in_f)
 
-            s_in = torch.from_numpy(
-                s_in_all[i]
-            ).float().to(self.device)
+        # reshape back to (B, L, ...)
+        s_out_pred = s_out_pred_f.reshape(B, L, -1)
+        a_out_pred = a_out_pred_f.reshape(B, L, -1)
 
-            a_in = torch.from_numpy(
-                a_in_all[i]
-            ).float().to(self.device)
+        # action mse averaged over all time steps and samples
+        action_mse = self.criterion(a_out_pred_f, a_out_gt_f).item()
 
-            s_out_gt = torch.from_numpy(
-                s_out_all[i]
-            ).float().to(self.device)
+        # full mse averaged over all time steps and samples
+        pred_cat = torch.cat([s_out_pred_f, a_out_pred_f], dim=-1)
+        gt_cat = torch.cat([s_out_gt_f, a_out_gt_f], dim=-1)
+        full_mse = self.criterion(pred_cat, gt_cat).item()
 
-            a_out_gt = torch.from_numpy(
-                a_out_all[i]
-            ).float().to(self.device)
+        # ee error: use the end-effector fields (already present in states) and compute MSE
+        ee_pred = arm_effector_fields_torch(s_out_pred)
+        ee_real = arm_effector_fields_torch(s_in_batch)
 
-            s_out_pred = self.state_mapper(
-                s_in
-            )
-
-            a_out_pred = self.action_mapper(
-                s_in,
-                a_in
-            )
-
-            action_mse += self.criterion(
-                a_out_pred,
-                a_out_gt
-            ).item()
-
-            L = s_in.shape[0]
-
-            seg_ee = 0.0
-
-            for t in range(L):
-
-                ee_pred = ee_from_state(
-                    s_out_pred[t]
-                    .cpu()
-                    .numpy(),
-                    self.dof_out
-                )
-
-                ee_real = ee_from_state(
-                    s_out_gt[t]
-                    .cpu()
-                    .numpy(),
-                    self.dof_out
-                )
-
-                seg_ee += (
-                    np.linalg.norm(
-                        ee_pred
-                        - ee_real
-                    ) ** 2
-                )
-
-            ee_error += seg_ee / L
-
-            pred_cat = torch.cat(
-                [
-                    s_out_pred,
-                    a_out_pred
-                ],
-                dim=-1
-            )
-
-            gt_cat = torch.cat(
-                [
-                    s_out_gt,
-                    a_out_gt
-                ],
-                dim=-1
-            )
-
-            full_mse += self.criterion(
-                pred_cat,
-                gt_cat
-            ).item()
+        # per-time squared error, mean over time and samples
+        ee_error = (ee_pred - ee_real).pow(2).sum(dim=-1).mean().item()
 
         return {
-            "action_mse":
-                action_mse / n,
-
-            "ee_error":
-                ee_error / n,
-
-            "full_mse":
-                full_mse / n,
+            "action_mse": action_mse,
+            "ee_error": ee_error,
+            "full_mse": full_mse,
         }
 
     # =====================================================
@@ -614,11 +693,25 @@ class TransferMapper:
 
 def main():
 
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
-    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(f"[INFO] Using device: {device}")
+
+    if device.type == "cuda":
+        print(f"[INFO] torch.version.cuda = {torch.version.cuda}; device_count = {torch.cuda.device_count()}")
+        # Enable TF32 and higher float32 matmul precision for faster matmuls on Ampere+ GPUs
+        try:
+            torch.backends.cudnn.allow_tf32 = True
+        except Exception:
+            pass
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = True
+        except Exception:
+            pass
+        try:
+            torch.set_float32_matmul_precision('high')
+        except Exception:
+            pass
 
     data_dir = Path(
         "./data/DIRECT"
@@ -662,30 +755,81 @@ def main():
         "segments_actions_3dof"
     ]
 
+    # If temporal variants exist, build combined inputs by concatenating
+    # spatial + temporal features along the last axis. Keep targets (outputs)
+    # in their original spatial form to preserve downstream expectations.
+    if (
+        "segments_2dof_temporal" in trajectories
+        and "segments_3dof_temporal" in trajectories
+        and "segments_actions_2dof_temporal" in trajectories
+        and "segments_actions_3dof_temporal" in trajectories
+    ):
+        print("[INFO] Temporal variants detected — creating combined inputs (spatial+temporal)")
+
+        s2_t = trajectories["segments_2dof_temporal"]
+        s3_t = trajectories["segments_3dof_temporal"]
+        a2_t = trajectories["segments_actions_2dof_temporal"]
+        a3_t = trajectories["segments_actions_3dof_temporal"]
+
+        # basic shape checks
+        if s2.shape != s2_t.shape or s3.shape != s3_t.shape:
+            raise ValueError("Spatial and temporal state variants have mismatched shapes")
+        if a2.shape != a2_t.shape or a3.shape != a3_t.shape:
+            raise ValueError("Spatial and temporal action variants have mismatched shapes")
+
+        # concatenate along feature dim
+        s2_comb = np.concatenate([s2, s2_t], axis=-1)
+        s3_comb = np.concatenate([s3, s3_t], axis=-1)
+        a2_comb = np.concatenate([a2, a2_t], axis=-1)
+        a3_comb = np.concatenate([a3, a3_t], axis=-1)
+
+        # Use combined inputs as the mapper inputs; keep outputs original spatial
+        s2_in = s2_comb
+        s3_in = s3_comb
+        a2_in = a2_comb
+        a3_in = a3  # keep a3 as original (out action remains original dims)
+
+    else:
+        print("[INFO] No temporal variants found — using spatial-only inputs")
+        s2_in = s2
+        s3_in = s3
+        a2_in = a2
+        a3_in = a3
+
     log_dir = (
         data_dir /
         "mappers_logs"
     )
 
+    # Configure and train mapper 2→3 (state: 3dof -> 2dof, action: 2->3)
+    t23_in_state_dim = s3_in.shape[-1]
+    t23_out_state_dim = s2.shape[-1]
+    t23_in_act_dim = a2_in.shape[-1]
+    t23_out_act_dim = a3.shape[-1]
+
     t23 = TransferMapper(
-        8,
-        6,
-        2,
-        3,
+        t23_in_state_dim,
+        t23_out_state_dim,
+        t23_in_act_dim,
+        t23_out_act_dim,
         device=device,
         log_dir=str(
             log_dir /
             "2to3"
         ),
-        label="2→3"
+        label="2→3_combined" if s3_in.shape[-1] != s3.shape[-1] else "2→3",
     )
 
     t23.train(
-        s3,
+        s3_in,
         s2,
-        a2,
-        a3,
-        epochs=1200
+        a2_in,
+        a3_in,
+        epochs=1200,
+        batch_size=2048,
+        num_workers=0,
+        prefetch_factor=4,
+        dataset_half=True,
     )
 
     t23.save(
@@ -693,25 +837,35 @@ def main():
         "transfer_2to3_seq.pt"
     )
 
+    # Configure and train mapper 3→2 (state: 2dof -> 3dof, action: 3->2)
+    t32_in_state_dim = s2_in.shape[-1]
+    t32_out_state_dim = s3.shape[-1]
+    t32_in_act_dim = a3_in.shape[-1]
+    t32_out_act_dim = a2.shape[-1]
+
     t32 = TransferMapper(
-        6,
-        8,
-        3,
-        2,
+        t32_in_state_dim,
+        t32_out_state_dim,
+        t32_in_act_dim,
+        t32_out_act_dim,
         device=device,
         log_dir=str(
             log_dir /
             "3to2"
         ),
-        label="3→2"
+        label="3→2_combined" if s2_in.shape[-1] != s2.shape[-1] else "3→2",
     )
 
     t32.train(
-        s2,
+        s2_in,
         s3,
-        a3,
+        a3_in,
         a2,
-        epochs=1200
+        epochs=1200,
+        batch_size=2048,
+        num_workers=0,
+        prefetch_factor=4,
+        dataset_half=True,
     )
 
     t32.save(

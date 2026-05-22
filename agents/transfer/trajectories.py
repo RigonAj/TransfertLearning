@@ -10,7 +10,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from envs.env_continuous_reaching_2dof import Arm2DoFPersistentEnv
 from envs.env_continuous_reaching_3dof import Arm3DoFPersistentEnv
-from .utils import spatial_sampling_aligned
+from .utils import spatial_sampling_aligned, temporal_sampling_aligned
 
 import torch
 torch.set_num_threads(4)
@@ -171,14 +171,22 @@ def record_one_segment(env2, env3, start_target, end_target,
 # Génération principale
 # =========================================================
 
-def main():
-    NUM_SAMPLES           = 50
-    N_SEGMENTS_TARGET     = 50_000
-    TARGETS_PER_EPISODE   = 30
-    MAX_STEPS_PER_SEGMENT = 60
-    TOLERANCE             = 0.2
-    WAIT_MAX_STEPS        = 500
-    TARGET_SCALE          = 0.98
+def main(
+    num_samples: int = 50,
+    n_segments_target: int = 50_000,
+    targets_per_episode: int = 30,
+    max_steps_per_segment: int = 60,
+    tol: float = 0.2,
+    wait_max_steps: int = 500,
+    target_scale: float = 0.98,
+):
+    NUM_SAMPLES = num_samples
+    N_SEGMENTS_TARGET = n_segments_target
+    TARGETS_PER_EPISODE = targets_per_episode
+    MAX_STEPS_PER_SEGMENT = max_steps_per_segment
+    TOLERANCE = tol
+    WAIT_MAX_STEPS = wait_max_steps
+    TARGET_SCALE = target_scale
 
     data_dir  = Path("./data/DIRECT")
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -208,6 +216,12 @@ def main():
     all_segments_s3 = []
     all_segments_a2 = []
     all_segments_a3 = []
+
+    # temporal variants (time-uniform sampling)
+    all_segments_s2_temporal = []
+    all_segments_s3_temporal = []
+    all_segments_a2_temporal = []
+    all_segments_a3_temporal = []
 
     valid_segments = 0
     start_time     = time.time()
@@ -253,8 +267,13 @@ def main():
                 continue
 
             # Spatial sampling CONJOINT → alignement (s_t, a_t) préservé
-            s2_ss, a2_ss = spatial_sampling_aligned(s2, a2, NUM_SAMPLES)
-            s3_ss, a3_ss = spatial_sampling_aligned(s3, a3, NUM_SAMPLES)
+            # Use end-effector-only arc-length for robust geometric alignment
+            s2_ss, a2_ss = spatial_sampling_aligned(s2, a2, NUM_SAMPLES, use_effector=True)
+            s3_ss, a3_ss = spatial_sampling_aligned(s3, a3, NUM_SAMPLES, use_effector=True)
+
+            # Temporal sampling (uniform in time) — preserves dynamics / timing
+            s2_tt, a2_tt = temporal_sampling_aligned(s2, a2, NUM_SAMPLES)
+            s3_tt, a3_tt = temporal_sampling_aligned(s3, a3, NUM_SAMPLES)
 
             # Vérification de santé avant stockage
             if (np.any(np.isnan(s2_ss)) or np.any(np.isnan(s3_ss))
@@ -265,6 +284,11 @@ def main():
             all_segments_s3.append(s3_ss)
             all_segments_a2.append(a2_ss)
             all_segments_a3.append(a3_ss)
+
+            all_segments_s2_temporal.append(s2_tt)
+            all_segments_s3_temporal.append(s3_tt)
+            all_segments_a2_temporal.append(a2_tt)
+            all_segments_a3_temporal.append(a3_tt)
 
             valid_segments += 1
             pbar.update(1)
@@ -284,18 +308,31 @@ def main():
     segments_a2 = np.stack(all_segments_a2, axis=0)  # (N, L, 2)
     segments_a3 = np.stack(all_segments_a3, axis=0)  # (N, L, 3)
 
+    segments_s2_temporal = np.stack(all_segments_s2_temporal, axis=0)
+    segments_s3_temporal = np.stack(all_segments_s3_temporal, axis=0)
+    segments_a2_temporal = np.stack(all_segments_a2_temporal, axis=0)
+    segments_a3_temporal = np.stack(all_segments_a3_temporal, axis=0)
+
     print(f"\nGenerated {len(segments_s2)} segments of length {NUM_SAMPLES}.")
     print(f"Total pas de temps : {segments_s2.shape[0] * segments_s2.shape[1]}")
 
     trajectories = {
+        # Default keys keep spatial sampling for backward compatibility
         'segments_2dof':         segments_s2,
         'segments_3dof':         segments_s3,
         'segments_actions_2dof': segments_a2,
         'segments_actions_3dof': segments_a3,
+
+        # Temporal variants (uniform in time)
+        'segments_2dof_temporal':         segments_s2_temporal,
+        'segments_3dof_temporal':         segments_s3_temporal,
+        'segments_actions_2dof_temporal': segments_a2_temporal,
+        'segments_actions_3dof_temporal': segments_a3_temporal,
+
         'metadata': {
             'n_segments': valid_segments,
             'seq_len':    NUM_SAMPLES,
-            'source':     'spatial_sampling_aligned',
+            'source':     'spatial+temporal_sampling_aligned',
         },
     }
     with open(traj_path, 'wb') as f:
@@ -304,4 +341,25 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--num_samples', type=int, default=50)
+    parser.add_argument('--n_segments', type=int, default=50000)
+    parser.add_argument('--targets_per_episode', type=int, default=30)
+    parser.add_argument('--max_steps_per_segment', type=int, default=60)
+    parser.add_argument('--tol', type=float, default=0.2)
+    parser.add_argument('--wait_max_steps', type=int, default=500)
+    parser.add_argument('--target_scale', type=float, default=0.98)
+
+    args = parser.parse_args()
+
+    main(
+        num_samples=args.num_samples,
+        n_segments_target=args.n_segments,
+        targets_per_episode=args.targets_per_episode,
+        max_steps_per_segment=args.max_steps_per_segment,
+        tol=args.tol,
+        wait_max_steps=args.wait_max_steps,
+        target_scale=args.target_scale,
+    )

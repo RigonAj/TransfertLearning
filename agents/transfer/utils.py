@@ -43,7 +43,8 @@ def spatial_sampling(trajectory: np.ndarray, num_samples: int = 50) -> np.ndarra
 
 
 def spatial_sampling_aligned(states: np.ndarray, actions: np.ndarray,
-                              num_samples: int = 50):
+                              num_samples: int = 50,
+                              use_effector: bool = True):
     """
     Ré-échantillonne CONJOINTEMENT states (T, Ds) et actions (T, Da) en
     num_samples points, en utilisant la paramétrisation arc-length calculée
@@ -63,8 +64,19 @@ def spatial_sampling_aligned(states: np.ndarray, actions: np.ndarray,
         "le même nombre de lignes."
     )
 
-    diffs    = np.diff(states, axis=0)
-    dists    = np.linalg.norm(diffs, axis=1)
+    # If requested, compute arc-length using only end-effector coords
+    if use_effector:
+        D = states.shape[1]
+        if D == 6:
+            eff_sl = slice(4, 6)
+        elif D == 8:
+            eff_sl = slice(6, 8)
+        else:
+            eff_sl = slice(D - 2, D)
+        diffs = np.diff(states[:, eff_sl], axis=0)
+    else:
+        diffs = np.diff(states, axis=0)
+    dists = np.linalg.norm(diffs, axis=1)
     cum_dist = np.insert(np.cumsum(dists), 0, 0.0)
     total_dist = cum_dist[-1]
 
@@ -85,5 +97,41 @@ def spatial_sampling_aligned(states: np.ndarray, actions: np.ndarray,
 
     for d in range(actions.shape[1]):
         actions_out[:, d] = np.interp(target_dists, cum_dist_strict, actions[:, d])
+
+    return states_out, actions_out
+
+
+def temporal_sampling_aligned(states: np.ndarray, actions: np.ndarray,
+                              num_samples: int = 50):
+    """
+    Time-based resampling: produce `num_samples` points uniformly in time
+    (interpolated) while preserving alignment between `states` and `actions`.
+    """
+    assert len(states) == len(actions), (
+        f"states ({len(states)}) and actions ({len(actions)}) must have the same length"
+    )
+
+    T = len(states)
+    if T == 0:
+        return (
+            np.zeros((num_samples, states.shape[1]), dtype=np.float32),
+            np.zeros((num_samples, actions.shape[1]), dtype=np.float32),
+        )
+
+    if T == 1:
+        idx = np.zeros(num_samples, dtype=int)
+        return states[idx].astype(np.float32), actions[idx].astype(np.float32)
+
+    orig_idx = np.arange(T)
+    target_idx = np.linspace(0, T - 1, num_samples)
+
+    states_out = np.zeros((num_samples, states.shape[1]), dtype=np.float32)
+    actions_out = np.zeros((num_samples, actions.shape[1]), dtype=np.float32)
+
+    for d in range(states.shape[1]):
+        states_out[:, d] = np.interp(target_idx, orig_idx, states[:, d])
+
+    for d in range(actions.shape[1]):
+        actions_out[:, d] = np.interp(target_idx, orig_idx, actions[:, d])
 
     return states_out, actions_out

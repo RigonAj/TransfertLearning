@@ -1,0 +1,10 @@
+cd ./agents/direct_method
+
+# 1. Entraîner le mapper d'états (positions + vitesses articulaires)
+python train_states_mapper.py
+
+# 2. Entraîner le mapper d'actions (couples/forces articulaires)  
+python train_actions_mapper.py
+
+# 3. (Optionnel) Visualiser les données
+python print_dataset.py

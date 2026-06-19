@@ -7,6 +7,7 @@ PyQt5
 
 tensorboard
 tqdm
+rich
 
 opencv-python-headless
 

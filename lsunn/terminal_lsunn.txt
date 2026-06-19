@@ -1,0 +1,20 @@
+source .venv/bin/activate
+
+# TensorBoard 
+tensorboard --logdir data/LSUNN
+
+# training
+python -m lsunn.train.trajectories
+python -m lsunn.train.train_vae
+python -m lsunn.train.train_ppo
+python -m lsunn.train.train_mappers
+#python -m lsunn.train.train_joint_transfer
+
+# Tests
+python -m lsunn.tests.test_lsunn_pushball_2dof
+python -m lsunn.tests.test_lsunn_pushball_3dof
+
+# Transfer
+python -m lsunn.tests.transfer_test
+#python -m lsunn.tests.transfer_pushball_2to3dof
+#python -m lsunn.tests.transfer_pushball_3to2dof

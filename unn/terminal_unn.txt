@@ -1,0 +1,33 @@
+
+# activate venv
+source .venv/bin/activate
+
+# tensorboard
+tensorboard --logdir data/UNN
+
+# training
+python -m unn.train.train_unn_pushball_2dof
+python -m unn.train.train_unn_pushball_3dof
+
+# test
+python -m unn.tests.test_unn_pushball_2dof
+python -m unn.tests.test_unn_pushball_3dof
+
+# transfer
+python -m unn.tests.transfer_pushball_2to3dof
+python -m unn.tests.transfer_pushball_3to2dof
+
+# record runs
+python3 -m unn.record.runs_pushball_2dof
+python3 -m unn.record.runs_pushball_3dof
+python3 -m unn.record.runs_transfer_pushball_2to3dof
+python3 -m unn.record.runs_transfer_pushball_3to2dof
+
+# replay runs, args: --success or --fail,  --ep 3, --delay 0.02
+python3 -m unn.visualize.replay_pushball_2dof
+python3 -m unn.visualize.replay_pushball_3dof
+python3 -m unn.visualize.replay_transfer_pushball_2to3dof
+python3 -m unn.visualize.replay_transfer_pushball_3to2dof
+
+
+

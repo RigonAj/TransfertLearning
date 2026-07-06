@@ -1,0 +1,107 @@
+# activate venv
+source .venv/bin/activate
+
+
+
+## LOGS ##
+
+#tensorboard
+tensorboard --logdir models         #agents training
+tensorboard --logdir data           #mappers training
+
+
+
+## TRAINING ##
+
+# train agents reaching
+python3 -m agents.train.train_reaching_2dof
+python3 -m agents.train.train_reaching_3dof
+python3 -m agents.train.train_reaching_align3to2
+python3 -m agents.train.train_reaching_align2to3
+
+# train mappers
+python3 -m direct_method.train_states_mapper
+python3 -m direct_method.train_actions_mapper
+python3 -m direct_method.print_dataset
+
+python3 -m direct_method.visualize_state_mapper --animate
+python3 -m direct_method.visualize_velocity_mapper --delay 1
+
+
+# train agents pushball
+python3 -m agents.train.train_pushball_2dof
+python3 -m agents.train.train_pushball_3dof
+python3 -m agents.train.train_pushball_2dof_rec
+python3 -m agents.train.train_pushball_3dof_rec
+
+
+
+## TASKS ##
+
+# get tasks' infos
+python3 -m agents.test.reaching_2dof
+python3 -m agents.test.reaching_3dof
+python3 -m agents.test.pushball_2dof
+python3 -m agents.test.pushball_3dof
+
+# record runs
+python3 -m agents.record.runs_reach_2dof
+python3 -m agents.record.runs_reach_3dof
+python3 -m agents.record.runs_pushball_2dof
+python3 -m agents.record.runs_pushball_3dof
+
+# replay runs, args: --success or --fail,  --ep 3, --delay 0.02
+python3 -m agents.visualize.replay_reach_2dof
+python3 -m agents.visualize.replay_reach_3dof
+python3 -m agents.visualize.replay_pushball_2dof
+python3 -m agents.visualize.replay_pushball_3dof
+
+
+
+## TRANSFER PPO ##
+
+# visualize trajectories, arg: --pair 42 --n_targets 15 --steps_per_target 60 --min_dist 0.15
+python3 -m agents.visualize.ppo.show_aligned_trajectories
+
+# get transfered tasks' infos
+python3 -m agents.test.ppo.transfer_reaching_2to3dof
+python3 -m agents.test.ppo.transfer_reaching_3to2dof
+python3 -m agents.test.ppo.transfer_pushball_2to3dof
+python3 -m agents.test.ppo.transfer_pushball_3to2dof
+
+# record runs
+python3 -m agents.record.ppo.runs_transfer_reach_2to3dof
+python3 -m agents.record.ppo.runs_transfer_reach_3to2dof
+python3 -m agents.record.ppo.runs_transfer_pushball_2to3dof
+python3 -m agents.record.ppo.runs_transfer_pushball_3to2dof
+
+# replay runs, args: --success or --fail,  --ep 3, --delay 0.02
+python3 -m agents.visualize.ppo.replay_transfer_reach_2to3dof
+python3 -m agents.visualize.ppo.replay_transfer_reach_3to2dof
+python3 -m agents.visualize.ppo.replay_transfer_pushball_2to3dof
+python3 -m agents.visualize.ppo.replay_transfer_pushball_3to2dof
+
+
+## TRANSFER GEN ALGO ##
+
+# visualize trajectories, arg: --pair 42 --n_targets 15 --steps_per_target 60 --min_dist 0.15
+python3 -m agents.visualize.gen_algo.show_aligned_trajectories
+
+# get transfered tasks' infos
+python3 -m agents.test.gen_algo.transfer_reaching_2to3dof
+python3 -m agents.test.gen_algo.transfer_reaching_3to2dof
+python3 -m agents.test.gen_algo.transfer_pushball_2to3dof
+python3 -m agents.test.gen_algo.transfer_pushball_3to2dof
+
+# record runs
+python3 -m agents.record.gen_algo.runs_transfer_reach_2to3dof
+python3 -m agents.record.gen_algo.runs_transfer_reach_3to2dof
+python3 -m agents.record.gen_algo.runs_transfer_pushball_2to3dof
+python3 -m agents.record.gen_algo.runs_transfer_pushball_3to2dof
+
+# replay runs, args: --success or --fail,  --ep 3, --delay 0.02
+python3 -m agents.visualize.gen_algo.replay_transfer_reach_2to3dof
+python3 -m agents.visualize.gen_algo.replay_transfer_reach_3to2dof
+python3 -m agents.visualize.gen_algo.replay_transfer_pushball_2to3dof
+python3 -m agents.visualize.gen_algo.replay_transfer_pushball_3to2dof
+

@@ -1,0 +1,56 @@
+# Environnements virtuels
+.venv/
+venv/
+env/
+ENV/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Fichiers de compilation / build
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Fichiers temporaires Python
+*.pyo
+*.pyd
+*.so
+
+# Logs
+*.log
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Type checking / linting caches
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Fichiers temporaires système
+.DS_Store
+Thumbs.db
+
+# Fichiers d'éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Variables d'environnement
+.env
+.env.*

@@ -21,13 +21,13 @@ if __name__ == "__main__":
     # Hyperparamètres
     # ==============================
     total_batch = 16384
-    n_envs = 64                # comme 2DoF
-    TOTAL_TIMESTEPS = 300_000_000  # comme 2DoF
+    n_envs = 8                 # 20 cœurs dispo : 64 sous-processus saturaient la machine
+    TOTAL_TIMESTEPS = 15_000_000   # budget de test (300M pour un run complet)
 
     # ==============================
     # Directories
     # ==============================
-    run_id = 1
+    run_id = 2     # _1 = run existant copié de l'ancien PC, ne pas écraser
     run_name = f"ppo_pushball_3dof_{run_id}"
     tensorboard_log_dir = f"./data/models/{run_name}/"
     model_dir = f"./data/models/{run_name}/"
@@ -151,7 +151,7 @@ if __name__ == "__main__":
         # ==============================
         # PPO
         # ==============================
-        n_steps = 2048           # comme 2DoF
+        n_steps = total_batch // n_envs   # 2048 : rollout total inchangé (16384)
         batch_size = 1024        # comme 2DoF
 
         model = PPO(
@@ -160,7 +160,7 @@ if __name__ == "__main__":
             n_steps=n_steps,
             batch_size=batch_size,
             n_epochs=5,
-            learning_rate=3e-4,
+            learning_rate=linear_schedule(3e-4),
             gamma=0.99,
             gae_lambda=0.95,
             clip_range=0.2,

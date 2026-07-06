@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changements et raisonnement — mappers robot-robot et BC database-robot</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1c1e21; --muted: #57606a; --border: #d8dee4;
+  --code-bg: #f6f8fa; --code-fg: #24292f; --accent: #0b5cad;
+  --th-bg: #eef2f6; --btn-bg: #e7ecf1; --btn-fg: #333; --ok: #1a7f37;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9da7b1; --border: #30363d;
+    --code-bg: #161b22; --code-fg: #e6edf3; --accent: #58a6ff;
+    --th-bg: #1c2128; --btn-bg: #21262d; --btn-fg: #c9d1d9; --ok: #3fb950;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 2rem 1rem 4rem; background: var(--bg); color: var(--fg);
+  font: 16px/1.65 -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; }
+h1, h2, h3 { line-height: 1.25; scroll-margin-top: 1rem; }
+h1 { font-size: 1.9rem; border-bottom: 2px solid var(--border); padding-bottom: .5rem; }
+h2 { font-size: 1.45rem; margin-top: 2.4rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+h3 { font-size: 1.15rem; margin-top: 1.8rem; }
+a { color: var(--accent); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+blockquote {
+  margin: 1rem 0; padding: .5rem 1rem; border-left: 4px solid var(--accent);
+  background: var(--code-bg); color: var(--muted); border-radius: 0 6px 6px 0;
+}
+code {
+  font: 0.875em/1.5 ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+  background: var(--code-bg); color: var(--code-fg);
+  padding: .15em .4em; border-radius: 4px;
+}
+.codewrap { position: relative; margin: 1rem 0; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem; overflow-x: auto; margin: 0;
+}
+pre code { background: none; padding: 0; font-size: .85rem; display: block; }
+.copybtn {
+  position: absolute; top: .5rem; right: .5rem;
+  background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: .25rem .7rem; font-size: .78rem; cursor: pointer;
+}
+.copybtn:hover { border-color: var(--accent); color: var(--accent); }
+.copybtn.ok { color: var(--ok); border-color: var(--ok); }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: .45rem .7rem; text-align: left; }
+th { background: var(--th-bg); }
+tr:nth-child(even) td { background: color-mix(in srgb, var(--code-bg) 55%, var(--bg)); }
+li { margin: .25rem 0; }
+.footer { margin-top: 3rem; color: var(--muted); font-size: .85rem;
+  border-top: 1px solid var(--border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+<h1 id="changements-et-raisonnement-mappers-robot-robot-et-bc-database-robot">Changements et raisonnement — mappers robot-robot et BC database-robot</h1>
+<p>Date : 2026-07-06. Ce document explique en détail chaque changement apporté au
+dépôt, le raisonnement qui y a conduit, et comment reproduire/interpréter les
+résultats.</p>
+<hr />
+<h2 id="1-le-diagnostic-pourquoi-laction-mapper-echouait">1. Le diagnostic : pourquoi l'action mapper échouait</h2>
+<h3 id="11-le-symptome-observe">1.1 Le symptôme observé</h3>
+<blockquote>
+<p>Lorsque l'effecteur est loin de (0, 0) avec le bras presque tendu, les
+vitesses prédites sont différentes mais alignées ; lorsque l'effecteur se
+rapproche de (0, 0) avec le bras plié, c'est la différence d'angle entre les
+vitesses prédites qui augmente mais la norme semble être la même.</p>
+</blockquote>
+<h3 id="12-la-cause-structurelle">1.2 La cause structurelle</h3>
+<p>La vitesse cartésienne de l'effecteur d'un bras est :</p>
+<pre><code>v_eff = J(θ) @ dθ
+</code></pre>
+<p>où le Jacobien <code>J(θ)</code> dépend des angles articulaires. <strong>La même commande <code>dθ</code>
+produit des vitesses d'effecteur complètement différentes selon la posture.</strong></p>
+<p>Or l'ancien <code>action_mapper</code> (<code>direct_method/train_actions_mapper.py</code>) apprenait
+uniquement :</p>
+<pre><code>[dθ1, dθ2]  →  [dθ1, dθ2, dθ3]
+</code></pre>
+<p>sans jamais voir les angles. Il ne pouvait donc pas savoir quel Jacobien
+s'applique, ni côté source ni côté cible. Il apprenait au mieux la relation
+<em>moyenne</em> sur le dataset — d'où :</p>
+<ul>
+<li><strong>bras tendu (r → 3 m)</strong> : près d'une singularité, le gain du Jacobien varie
+  énormément → la direction moyenne reste à peu près bonne mais la <strong>norme</strong>
+  est fausse ;</li>
+<li><strong>bras plié près du centre (r → 0)</strong> : les colonnes du Jacobien tournent très
+  vite avec θ, plusieurs postures donnent des positions proches mais des
+  directions locales opposées → la norme moyenne est plausible mais la
+  <strong>direction</strong> est fausse.</li>
+</ul>
+<p>C'est exactement le symptôme rapporté. Le graphique
+<code>direct_method/runs/eval/action_mapper_legacy_2to3_summary.png</code> le montre
+quantitativement : erreur d'angle médiane ~28° près du centre décroissant vers
+~5° au bord, erreur de norme ~0,15–0,2 m/s partout.</p>
+<h3 id="13-deux-decouvertes-supplementaires-dans-les-donnees">1.3 Deux découvertes supplémentaires dans les données</h3>
+<p>En instrumentant les fichiers <code>direct_method/trajectories/robot_{2,3}dofs.txt</code>
+(97 435 lignes appariées), deux faits importants sont apparus :</p>
+<p><strong>a) Les colonnes « effecteur » ne sont pas en mètres.</strong> Les 2 dernières
+colonnes sont identiques dans les deux fichiers et encodées en coordonnées
+fenêtre <code>(eff + 5) / 10</code> (vérifié numériquement : <code>eff = 10·col − 5</code> reproduit
+<code>FK(θ)</code> à 7·10⁻⁶ près). L'ancien pipeline les normalisait par <code>max_reach = 3</code>,
+produisant des features dans [0,07 ; 0,27]… alors qu'au moment du transfert les
+environnements fournissent <code>eff / 3</code> dans [−1 ; 1]. Le state mapper legacy
+était donc entraîné sur une distribution d'entrée différente de celle qu'il
+voit en production.</p>
+<p><strong>b) Les positions sont parfaitement alignées, pas les vitesses.</strong> Ligne à
+ligne, <code>‖FK2(θ_2dof) − FK3(θ_3dof)‖ = 0</code> exactement (la correspondance de
+posture a été générée analytiquement), mais <code>‖v2 − v3‖</code> a une médiane de
+<strong>0,26 m/s</strong> (p90 = 0,77). Autrement dit, les cibles articulaires 3DoF du
+dataset ne reproduisent PAS la vitesse d'effecteur du 2DoF. Ce n'est pas un
+détail : l'erreur résiduelle du mapper legacy (0,2632 m/s en médiane) est
+exactement l'écart de vitesse du dataset — le réseau apprenait fidèlement des
+cibles cinématiquement incohérentes.</p>
+<p><strong>Conséquence :</strong> une MSE articulaire vers ces cibles ne peut pas donner un bon
+mapper, même avec un réseau parfait. Il faut viser directement la grandeur
+physique commune : la vitesse cartésienne de l'effecteur <strong>source</strong>.</p>
+<hr />
+<h2 id="2-larchitecture-de-la-solution">2. L'architecture de la solution</h2>
+<p>Trois niveaux, du plus sûr au plus flexible :</p>
+<ol>
+<li><strong>Cinématique exacte partagée</strong> (<code>kinematics.py</code>) : FK, Jacobiens,
+   pseudo-inverse amortie — la vérité physique, testée contre les envs.</li>
+<li><strong>Baseline analytique sans apprentissage</strong> (<code>action_mapper_baseline.py</code>) :
+   <code>dθ_tgt = J_tgt⁺(θ_tgt) @ (J_src(θ_src) @ dθ_src)</code>. Il fixe le niveau de
+   performance de référence et prouve que le problème est cinématique.</li>
+<li><strong>Réseau conditionné avec loss cartésienne</strong> (<code>train_actions_mapper.py</code>) :
+   garde l'approche apprise du projet, mais avec les bonnes entrées (θ_src,
+   θ_tgt) et le bon objectif (v_eff).</li>
+</ol>
+<p>Résultats offline mesurés (validation 9 800 échantillons, direction 2DoF→3DoF,
+médianes ; direction 3→2 similaire) :</p>
+<table>
+<thead>
+<tr>
+<th>Mapper</th>
+<th>‖v_pred − v_src‖</th>
+<th>Erreur de norme</th>
+<th>Erreur d'angle</th>
+<th>MSE artic.</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>legacy (run_02)</td>
+<td>0,263 m/s</td>
+<td>0,174 m/s</td>
+<td>8,94°</td>
+<td>0,0003</td>
+</tr>
+<tr>
+<td><strong>jacobian (baseline)</strong></td>
+<td><strong>0,0010 m/s</strong></td>
+<td>0,0009 m/s</td>
+<td><strong>0,024°</strong></td>
+<td>0,0067</td>
+</tr>
+<tr>
+<td>conditioned (run_04_cond)</td>
+<td>0,0045 m/s</td>
+<td>0,0017 m/s</td>
+<td>0,30°</td>
+<td>0,0035</td>
+</tr>
+</tbody>
+</table>
+<p>Lecture :</p>
+<ul>
+<li>les deux nouvelles approches réduisent l'erreur de vitesse d'un facteur
+  <strong>60 à 260</strong> par rapport au legacy, dans les deux régimes du symptôme
+  (angle près du centre : 19,3° → 0,03°/0,47° ; norme au bord :
+  0,15 m/s → 0,001/0,004 m/s) ;</li>
+<li>le baseline Jacobien est meilleur en médiane, mais le mapper conditionné est
+  <strong>plus robuste dans les pires cas près des singularités</strong> : en zone centre,
+  p90 de ‖v_pred − v_src‖ = 0,040 m/s contre 0,349 m/s pour la pinv amortie
+  (l'amortissement λ dégrade la solution quand J_tgt devient singulier, alors
+  que le réseau a appris à contourner ces configurations) ;</li>
+<li>noter la MSE articulaire : le legacy est excellent sur ce critère (0,0003)
+  tout en étant le pire en espace effecteur — preuve définitive que la MSE
+  articulaire vers ce dataset n'est pas le bon objectif (cf. §1.3.b).</li>
+</ul>
+<hr />
+<h2 id="3-changements-fichier-par-fichier-robot-robotdirect_method">3. Changements fichier par fichier (<code>robot-robot/direct_method/</code>)</h2>
+<h3 id="31-kinematicspy-nouveau">3.1 <code>kinematics.py</code> (nouveau)</h3>
+<p>Source unique de vérité pour la cinématique et les constantes (<code>L_2DOF</code>,
+<code>L_3DOF</code>, <code>OMEGA_MAX</code>, <code>MAX_REACH</code>, <code>DT</code>). Contient :</p>
+<ul>
+<li><code>fk</code>, <code>jacobian</code>, <code>eff_vel</code> génériques (torch, batchés, <strong>différentiables</strong> —
+  utilisables dans les losses), et les raccourcis <code>fk_2dof</code>, <code>jacobian_3dof</code>… ;</li>
+<li>les mêmes en NumPy (<code>*_np</code>) pour les scripts d'évaluation/transfert ;</li>
+<li><code>damped_pinv(J, lam)</code> : pseudo-inverse amortie
+  <code>Jᵀ(JJᵀ + λ²I)⁻¹</code>. L'amortissement borne le gain près des singularités
+  (bras tendu) — une pinv brute y exploserait ;</li>
+<li>helpers de normalisation (θ/π, dθ/ω_max, eff/max_reach) et <code>split_state</code>.</li>
+</ul>
+<p>Auto-test intégré (<code>python3 -m direct_method.kinematics</code>) : FK et v_eff
+comparés aux méthodes des envs (erreur &lt; 10⁻⁷), Jacobiens contre différences
+finies (&lt; 10⁻⁹), reconstruction <code>J @ (J⁺ @ v) ≈ v</code> hors singularités.</p>
+<p><em>Pourquoi :</em> les FK/Jacobiens étaient dupliqués (envs, visualiseurs) et aucune
+version différentiable n'existait pour les losses. Toute divergence entre
+copies aurait faussé l'entraînement silencieusement.</p>
+<h3 id="32-action_mapper_baselinepy-nouveau">3.2 <code>action_mapper_baseline.py</code> (nouveau)</h3>
+<p><code>JacobianActionMapper(direction, lam, null_space_gain)</code> :</p>
+<pre><code>v      = J_src(θ_src) @ dθ_src
+dθ_tgt = damped_pinv(J_tgt(θ_tgt)) @ v          [solution de norme minimale]
+       + (I − J⁺J) @ z                          [optionnel, 3DoF uniquement]
+</code></pre>
+<p>Le terme de null-space <code>z = −gain·θ_tgt</code> permet de ramener la posture 3DoF vers
+une configuration neutre <strong>sans modifier la vitesse de l'effecteur</strong> (le
+projecteur <code>I − J⁺J</code> garantit que z n'agit que dans le noyau du Jacobien).
+Par défaut <code>gain = 0</code> : solution de norme minimale.</p>
+<p><em>Pourquoi :</em> aucun entraînement requis, interprétable, et il résout la
+redondance 2→3 proprement. Si un réseau ne bat pas ce baseline, le réseau
+n'apporte rien. Auto-test intégré (reproduction de v_eff, invariance du
+null-space).</p>
+<h3 id="33-mapper_modelspy-etendu">3.3 <code>mapper_models.py</code> (étendu)</h3>
+<p>Ajout de <code>ActionMapperConditionedMLP(nq_src, nq_tgt, hidden=256)</code> :</p>
+<ul>
+<li>entrées : <code>dθ_src</code> normalisé + <code>θ_src</code> + <code>θ_tgt</code> (normalisés /π) ;</li>
+<li>featurisation <strong>sin/cos dans <code>forward</code></strong> : représentation continue à la
+  discontinuité ±π (un angle normalisé brut saute de −1 à +1 au passage de
+  ±180°, ce qui force le réseau à apprendre une discontinuité), et c'est
+  exactement la forme sous laquelle θ entre dans les Jacobiens ;</li>
+<li>sortie : <code>dθ_tgt</code> normalisé.</li>
+</ul>
+<p>Les anciennes classes <code>StateMapperMLP</code> et <code>ActionMapperMLP</code> sont conservées
+pour recharger les runs existants (run_01, run_02).</p>
+<p><em>Alternative rejetée :</em> donner directement le Jacobien aplati en entrée. Ça
+marche aussi, mais sin/cos suffit (le Jacobien est une fonction lisse de
+sin/cos des angles cumulés) et garde le modèle petit.</p>
+<h3 id="34-datasetpy-corrige-et-etendu">3.4 <code>dataset.py</code> (corrigé et étendu)</h3>
+<ul>
+<li><code>TrajectoriesTrainingDataset</code> : les colonnes effecteur sont désormais
+  <strong>recalculées par FK(θ)</strong> puis normalisées /3 — correction du bug d'encodage
+  fenêtre décrit en §1.3.a. Le format de sortie (6D/8D) est inchangé.</li>
+<li><code>TrajectoriesTrainingActionDataset</code> : retourne <code>(vel_r1, q_r1, vel_r2, q_r2)</code>
+  au lieu des seules vitesses (reprise de l'idée de <code>direct_method_2</code>,
+  nécessaire au conditionnement).</li>
+<li><code>block_split(dataset, fracs, block=200, seed)</code> : split train/val/test par
+  <strong>blocs contigus</strong> de 200 lignes. <code>random_split</code> par lignes mettait des
+  timesteps quasi identiques de part et d'autre du split → validation
+  artificiellement optimiste (fuite). C'est en partie pourquoi le mapper legacy
+  « semblait bon » à l'entraînement.</li>
+</ul>
+<h3 id="35-train_actions_mapperpy-reecrit">3.5 <code>train_actions_mapper.py</code> (réécrit)</h3>
+<p>Entraîne <code>ActionMapperConditionedMLP</code> dans les deux directions avec la loss :</p>
+<pre><code>loss = 1.0  · Huber(v_pred − v_src)              # objectif principal
+     + 0.5  · (1 − cos(v_pred, v_src))           # direction
+     + 0.25 · | ‖v_pred‖ − ‖v_src‖ |             # norme
+     + 0.1  · MSE(dθ_pred, dθ_dataset)           # régularisateur (faible !)
+     + 1e-4 · ‖dθ_pred‖²                          # préférence norme minimale
+</code></pre>
+<p>avec <code>v_src = J_src(θ_src)@dθ_src</code> et <code>v_pred = J_tgt(θ_tgt)@dθ_pred</code>, calculés
+en unités réelles par la cinématique différentiable.</p>
+<p>Choix importants :</p>
+<ul>
+<li><strong>la MSE articulaire a un poids faible (0,1)</strong> : cf. §1.3.b, les cibles du
+  dataset sont incohérentes en vitesse (écart médian 0,26 m/s). Un poids fort
+  tirerait le réseau vers cette erreur. Elle reste utile comme prior de
+  redondance (rester près des postures démontrées) ;</li>
+<li>la loss d'angle n'est appliquée que si <code>‖v_src‖ &gt; 0,05 m/s</code> (la direction
+  d'une vitesse quasi nulle n'a pas de sens et injecterait du bruit) ;</li>
+<li>LR 10⁻³ (l'ancien 3·10⁻³ était élevé pour Adam), <code>ReduceLROnPlateau</code>,
+  early stopping (patience 15) sur la <strong>loss cartésienne de validation</strong>,
+  seed fixé, sélection du meilleur modèle sur validation ;</li>
+<li>sorties : <code>runs/run_04_cond/</code> (modèles <code>action_mapper_2to3.pt</code>/<code>_3to2.pt</code>,
+  <code>config.json</code> avec tous les hyperparamètres, CSV par composante de loss,
+  courbes). <code>DM_EPOCHS=5 python3 -m …</code> pour un smoke test rapide.</li>
+</ul>
+<h3 id="36-train_states_mapperpy-reecrit">3.6 <code>train_states_mapper.py</code> (réécrit)</h3>
+<ul>
+<li>Importe le dataset et <code>StateMapperMLP</code> partagés (l'ancienne version
+  redéfinissait localement les deux — divergences garanties à terme).</li>
+<li>Loss enrichie :</li>
+</ul>
+<pre><code>loss = MSE(état_pred, état_cible)
+     + 0.5  · ‖FK(θ_pred) − eff_src‖²            # même position d'effecteur
+     + 0.25 · ‖J(θ_pred)@dθ_pred − v_src‖²       # même vitesse d'effecteur
+     + 0.1  · ‖map_back(map(s)) − s‖²            # cohérence cycle
+</code></pre>
+<p><em>Pourquoi la loss FK :</em> une MSE sur les angles pondère chaque articulation
+également, alors qu'une petite erreur sur θ1 déplace l'effecteur beaucoup plus
+qu'une erreur sur θ3. La loss FK pénalise l'effet cartésien réel.
+<em>Pourquoi la loss cycle :</em> les deux directions sont entraînées conjointement
+(un seul optimiseur) ; le cycle stabilise la bijection approximative entre les
+deux espaces d'états.</p>
+<ul>
+<li>Mêmes améliorations d'infrastructure que 3.5 (split par blocs, scheduler,
+  early stopping, seed, CSV par composante). Sorties : <code>runs/run_03_kin/</code>,
+  noms de fichiers modèles inchangés (compatibilité transfert/visualiseurs).</li>
+</ul>
+<h3 id="37-eval_mapperspy-nouveau">3.7 <code>eval_mappers.py</code> (nouveau)</h3>
+<p>Évaluation offline systématique sur le split de validation :</p>
+<ul>
+<li>action mappers <code>legacy</code> / <code>jacobian</code> / <code>conditioned</code>, deux directions ;</li>
+<li>state mappers (run_01 et run_03_kin) ;</li>
+<li>métriques : ‖v_pred − v_src‖, erreur de norme, erreur d'angle,
+  MSE articulaire, ‖FK(θ_pred) − eff_src‖ ;</li>
+<li><strong>ventilation par zone de rayon</strong> (centre &lt; 1 m / milieu / bord &gt; 2,5 m) —
+  la ventilation du symptôme ;</li>
+<li>diagnostic d'alignement des trajectoires (position et vitesse, cf. §1.3.b)
+  avec histogrammes ;</li>
+<li>sorties : tableaux console (médiane/p90), <code>runs/eval/metrics.csv</code>, PNG.</li>
+</ul>
+<p><em>Pourquoi :</em> sans métriques en espace effecteur, on optimise une loss qui ne
+mesure pas le problème. C'est l'outil de comparaison honnête entre approches.</p>
+<h3 id="38-transfer_pushball_3to2dofpy-corrige">3.8 <code>transfer_pushball_3to2dof.py</code> (corrigé)</h3>
+<p>Trois bugs corrigés :</p>
+<ol>
+<li><strong>Dimensions</strong> : <code>R1_STATE_DIM = 4, R2_STATE_DIM = 6</code> → <strong>6 et 8</strong>. L'ancien
+   script construisait un <code>StateMapperMLP(6→4)</code> et tentait d'y charger des
+   poids 8→6 (crash ou comportement indéfini selon la version de torch).</li>
+<li><strong>Normalisation des observations</strong> : la politique PPO 2DoF a été entraînée
+   sur des obs passées par <code>VecNormalize</code>. L'ancien script chargeait le
+   VecNormalize 2DoF (shape 10) sur l'env 3DoF (shape 12) puis le désactivait
+   (<code>norm_obs = False</code>) et donnait des obs brutes à la politique. Corrigé : le
+   VecNormalize 2DoF est chargé sur un env 2DoF factice et sert uniquement à
+   normaliser l'obs mappée juste avant <code>model.predict</code>.</li>
+<li><strong>Hack d'échelle</strong> : <code>action_mapper(action.clamp(-2,2) * 0.5)</code> — un facteur
+   arbitraire qui compensait empiriquement le mapper défaillant. Supprimé : les
+   mappers corrects n'en ont pas besoin.</li>
+</ol>
+<p>Ajouts : <code>--mapper {legacy, jacobian, conditioned}</code>, <code>--seed</code>, <code>--episodes</code>,
+<code>--run-state</code>, <code>--render</code>. Permet la comparaison A/B sur les mêmes graines.</p>
+<p>Flux corrigé complet :</p>
+<pre><code>obs 3DoF brute (12D) = [bras 8D | balle 2D | cible 2D]
+  → state_mapper_r2_to_r1(bras 8D) → bras 2DoF 6D
+  → concat + VecNormalize 2DoF → PPO 2DoF → action_2
+  → action mapper (θ2 mappé, θ3 réel) → action_3 → env 3DoF
+</code></pre>
+<h3 id="39-visualiseurs">3.9 Visualiseurs</h3>
+<ul>
+<li><code>visualize_velocity_mapper.py</code> : utilise désormais <code>kinematics.py</code> (au lieu
+  de copies locales de FK/Jacobiens) et instancie <code>StateMapperMLP</code> — l'ancien
+  code chargeait les poids du state mapper dans un <code>ActionMapperMLP</code> (même
+  architecture par coïncidence, mais nom trompeur). La normalisation d'entrée
+  recalcule l'effecteur par FK (bug §1.3.a). Défaut : <code>--run-id run_03_kin</code>.</li>
+<li><code>visualize_action_mapper.py</code> (nouveau) : reproduit le protocole visuel du
+  symptôme (bras côte à côte, flèches v_src/v_pred, erreur d'angle et normes
+  affichées) pour n'importe quel mapper, plus un mode <code>--summary</code> qui trace
+  erreur d'angle et de norme <strong>en fonction du rayon</strong> sur la validation.
+  Les PNG <code>runs/eval/action_mapper_{legacy,jacobian}_2to3_summary.png</code> générés
+  montrent le avant/après.</li>
+</ul>
+<h3 id="310-direct_method_2-statut">3.10 <code>direct_method_2/</code> — statut</h3>
+<p>Non modifié (archive). Sa bonne idée — conditionner par la configuration — est
+intégrée et généralisée dans <code>direct_method</code> (conditionnement par θ_src <strong>et</strong>
+θ_tgt + loss cartésienne, ce que <code>direct_method_2</code> n'avait pas : il gardait une
+MSE articulaire pure, écrivait ses sorties dans <code>direct_method/runs/</code> et son
+visualiseur était incompatible avec la signature de son propre modèle).</p>
+<hr />
+<h2 id="4-partie-bc-database-robottraintrain_bcpy-nouveau">4. Partie BC — <code>database-robot/train/train_bc.py</code> (nouveau)</h2>
+<h3 id="41-verdict-sur-les-deux-anciennes-versions">4.1 Verdict sur les deux anciennes versions</h3>
+<p>Les deux scripts font fondamentalement la même chose : MSE entre la moyenne de
+la distribution de la politique SB3 et l'action démontrée.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>train_behavior_cloning.py</code></th>
+<th><code>train_bc_imitation.py</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Boucle données</td>
+<td>DataLoader propre</td>
+<td>batching manuel <strong>bugué</strong> : <code>n_batches = size//bs + 1</code> → si <code>size % bs == 0</code>, le dernier batch est vide (crash potentiel) et la moyenne de loss est biaisée</td>
+</tr>
+<tr>
+<td>Lib <code>imitation</code></td>
+<td>non utilisée</td>
+<td>importée, <code>Transitions</code> construites… puis jamais utilisées (la boucle est manuelle)</td>
+</tr>
+<tr>
+<td>Sélection du modèle</td>
+<td>loss <strong>train</strong> (biais overfitting)</td>
+<td>loss <strong>train</strong> (idem)</td>
+</tr>
+<tr>
+<td>Validation</td>
+<td>aucune</td>
+<td>aucune</td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>train_behavior_cloning.py</code> est la meilleure base.</strong> Les deux restent en
+place ; <code>train_bc.py</code> devient la référence.</p>
+<h3 id="42-ce-que-le-script-unifie-ajoute">4.2 Ce que le script unifié ajoute</h3>
+<ul>
+<li><strong>Split train/val par épisode</strong> (défaut 90/10) : deux transitions d'un même
+  épisode sont fortement corrélées ; les répartir aléatoirement entre train et
+  val rendrait la validation optimiste. Best model choisi sur la <strong>loss val</strong>.</li>
+<li><strong>Deux losses</strong> : <code>--loss mse</code> (défaut, comportement historique) et
+  <code>--loss nll</code> (log-vraisemblance gaussienne + terme d'entropie, comme le BC de
+  la lib <code>imitation</code>) qui apprend aussi <code>log_std</code> — utile si la politique
+  clonée est utilisée en mode stochastique ou comme initialisation PPO.</li>
+<li><strong>Contrôle de normalisation</strong> : à l'ouverture des démos, le script vérifie si
+  les obs sont déjà normalisées VecNormalize (std ≈ 1, plage &gt; ±1,5). Pour
+  <code>database/pushball_2dof/demonstrations.pkl</code> : elles le sont (std = 1,004,
+  max = 3,07) → l'entraînement historique était cohérent, ne PAS utiliser
+  <code>--normalize-obs</code> avec ces démos. L'option existe pour des démos brutes.</li>
+<li>Scheduler <code>ReduceLROnPlateau</code>, early stopping (<code>--patience 25</code>), gradient
+  clipping, seed, checkpoints périodiques, TensorBoard (train/val/LR).</li>
+<li>CLI complète (<code>--env pushball_3dof</code> pour le 3DoF, chemins configurables).</li>
+<li>Sauvegarde inchangée (<code>ppo.save</code> + <code>vec_normalize.pkl</code>) : compatible
+  <code>test/visualize/replay_bc_pushball.py</code>.</li>
+</ul>
+<hr />
+<h2 id="5-comment-reproduire-dans-lordre">5. Comment reproduire (dans l'ordre)</h2>
+<p>Depuis <code>robot-robot/</code>, venv activé :</p>
+<pre><code class="language-bash"># 1. Auto-tests (aucun entraînement requis)
+python3 -m direct_method.kinematics
+python3 -m direct_method.action_mapper_baseline
+
+# 2. Entraînements (CPU ok, ~2 s/époque, early stopping)
+python3 -m direct_method.train_states_mapper      # -&gt; runs/run_03_kin
+python3 -m direct_method.train_actions_mapper     # -&gt; runs/run_04_cond
+#    (smoke test rapide : DM_EPOCHS=5 DM_RUN_ID=essai python3 -m …)
+
+# 3. Évaluation offline comparative
+python3 -m direct_method.eval_mappers             # tableaux + runs/eval/metrics.csv
+
+# 4. Visualisation
+python3 -m direct_method.visualize_action_mapper --summary --mapper jacobian
+python3 -m direct_method.visualize_action_mapper --summary --mapper conditioned
+python3 -m direct_method.visualize_action_mapper --mapper jacobian --idx 1200
+python3 -m direct_method.visualize_velocity_mapper --idx 100
+
+# 5. Transfert push-ball (nécessite data/models/ppo_pushball_2dof_1/ entraîné)
+python3 -m direct_method.transfer_pushball_3to2dof --mapper jacobian --seed 0
+python3 -m direct_method.transfer_pushball_3to2dof --mapper conditioned --seed 0
+python3 -m direct_method.transfer_pushball_3to2dof --mapper legacy --seed 0
+</code></pre>
+<p>Depuis <code>database-robot/</code> :</p>
+<pre><code class="language-bash">python3 train/train_bc.py --epochs 500            # MSE, défauts historiques
+python3 train/train_bc.py --loss nll              # variante NLL
+</code></pre>
+<h3 id="comment-lire-les-sorties-deval_mapperspy">Comment lire les sorties d'<code>eval_mappers.py</code></h3>
+<ul>
+<li>La colonne <code>‖v_pred−v_src‖</code> est LA métrique de transfert : c'est l'écart de
+  vitesse d'effecteur que le robot cible produira réellement.</li>
+<li>La zone <code>centre (r&lt;1.0)</code> teste le régime « bras plié » (symptôme d'angle),
+  la zone <code>bord (r&gt;2.5)</code> le régime « bras tendu » (symptôme de norme).</li>
+<li>La <code>MSE artic.</code> du baseline Jacobien est <em>volontairement</em> non nulle : il
+  choisit une autre solution de redondance que le dataset (norme minimale),
+  tout en reproduisant mieux la vitesse d'effecteur. C'est la preuve concrète
+  que la MSE articulaire n'est pas le bon objectif.</li>
+</ul>
+<hr />
+<h2 id="6-ce-qui-a-volontairement-ete-conserve">6. Ce qui a volontairement été conservé</h2>
+<ul>
+<li>Les anciens modèles (<code>run_01</code>, <code>run_02</code>) et leurs classes : rechargeables
+  pour comparaison (<code>--mapper legacy</code>, <code>--run-states run_01</code>).</li>
+<li>Le format des fichiers de trajectoires : lu tel quel, corrections faites au
+  chargement (pas de réécriture des données).</li>
+<li><code>direct_method_2/</code> intact, les deux anciens scripts BC intacts.</li>
+<li>Le format d'état 6D/8D des state mappers et les noms de fichiers modèles :
+  compatibilité avec les scripts existants.</li>
+</ul>
+<h2 id="7-resultats-mesures-et-prochaines-etapes">7. Résultats mesurés et prochaines étapes</h2>
+<h3 id="71-action-mappers-validation-offline">7.1 Action mappers (validation offline)</h3>
+<p>Voir le tableau du §2 et <code>direct_method/runs/eval/metrics.csv</code>. Les graphiques
+avant/après sont dans <code>direct_method/runs/eval/</code> :
+<code>action_mapper_legacy_2to3_summary.png</code> (le symptôme : 28° d'angle près du
+centre, 0,2 m/s de norme partout) contre
+<code>action_mapper_{jacobian,conditioned}_2to3_summary.png</code> (erreurs résiduelles
+&lt; 1° et &lt; 0,005 m/s sur toute la plage de rayons).</p>
+<h3 id="72-state-mappers-validation-offline-medianep90">7.2 State mappers (validation offline, médiane/p90)</h3>
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Direction</th>
+<th>‖FK(θ̂) − eff_src‖ (m)</th>
+<th>‖v_pred − v_src‖ (m/s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>run_01 (legacy)</td>
+<td>2→3</td>
+<td>0,79 / 2,64</td>
+<td>2,20 / 14,7</td>
+</tr>
+<tr>
+<td>run_01 (legacy)</td>
+<td>3→2</td>
+<td>1,24 / 3,95</td>
+<td>1,15 / 4,67</td>
+</tr>
+<tr>
+<td><strong>run_03_kin</strong></td>
+<td>2→3</td>
+<td><strong>0,011 / 0,059</strong></td>
+<td><strong>0,033 / 0,080</strong></td>
+</tr>
+<tr>
+<td><strong>run_03_kin</strong></td>
+<td>3→2</td>
+<td><strong>0,016 / 0,102</strong></td>
+<td><strong>0,049 / 0,111</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Les chiffres catastrophiques de run_01 s'expliquent : il a été entraîné sur
+les features effecteur en encodage fenêtre (§1.3.a) et est ici évalué sur le
+format de production (eff/3, celui que les envs fournissent au transfert).
+C'est le décalage qu'il subissait réellement dans
+<code>transfer_pushball_3to2dof.py</code>. run_03_kin place l'effecteur reconstruit à
+~1 cm et sa vitesse à ~0,04 m/s de la référence.</p>
+<h3 id="73-transfert-push-ball-etat-et-etape-manquante">7.3 Transfert push-ball : état et étape manquante</h3>
+<p>Le script corrigé tourne de bout en bout avec les trois mappers. MAIS sur ce
+PC, <code>data/models/ppo_pushball_2dof_2/</code> ne contient pas <code>vec_normalize.pkl</code>
+(copie incomplète : le script d'entraînement <code>agents/train/train_pushball_2dof.py</code>
+le sauvegarde normalement à côté de <code>best_model.zip</code>). Sans ces statistiques,
+la politique reçoit des obs non normalisées et échoue — quel que soit le
+mapper (0 % observé, attendu). <strong>La comparaison de taux de réussite en rollout
+n'est donc pas encore significative.</strong></p>
+<p>Prochaines étapes :</p>
+<ol>
+<li>Ré-entraîner la politique PPO push-ball 2DoF sur ce PC
+   (<code>python3 -m agents.train.train_pushball_2dof</code>), ce qui régénérera
+   <code>best_model.zip</code> <strong>et</strong> <code>vec_normalize.pkl</code>, puis lancer la comparaison :
+   <code>python3 -m direct_method.transfer_pushball_3to2dof --mapper {legacy,jacobian,conditioned} --seed 0 --episodes 100</code>
+   (avec <code>--model-path</code>/<code>--vecnorm-path</code> pointant sur le nouveau run).</li>
+<li>Si le mapper conditionné s'avère moins bon que le baseline en rollout,
+   utiliser le baseline en production et réserver le réseau au choix de
+   posture (résiduel dans le null-space) — architecture D de
+   <code>AVIS_TECHNIQUE_MAPPERS.md</code>. Vu §7.1 (le conditionné est plus robuste aux
+   singularités, le baseline meilleur en médiane), un hybride est plausible.</li>
+<li>Régénérer à terme le dataset de correspondance avec des vitesses cohérentes
+   (dθ3 = J3⁺ J2 dθ2 au moment de la génération) pour que la MSE articulaire
+   redevienne un signal propre.</li>
+</ol>
+<p class="footer">Généré depuis <code>CHANGEMENTS_ET_RAISONNEMENT.md</code> — 2026-07-06.
+Document compagnon : <a href="COMMANDES.html">COMMANDES.html</a>.</p>
+</main>
+<script>
+document.querySelectorAll("pre").forEach(function (pre) {
+  var wrap = document.createElement("div");
+  wrap.className = "codewrap";
+  pre.parentNode.insertBefore(wrap, pre);
+  wrap.appendChild(pre);
+  var btn = document.createElement("button");
+  btn.className = "copybtn";
+  btn.textContent = "Copier";
+  btn.addEventListener("click", function () {
+    navigator.clipboard.writeText(pre.innerText).then(function () {
+      btn.textContent = "Copié ✓"; btn.classList.add("ok");
+      setTimeout(function () { btn.textContent = "Copier"; btn.classList.remove("ok"); }, 2000);
+    });
+  });
+  wrap.appendChild(btn);
+});
+</script>
+</body>
+</html>

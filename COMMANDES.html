@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commandes — entraînement, évaluation et visualisation</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1c1e21; --muted: #57606a; --border: #d8dee4;
+  --code-bg: #f6f8fa; --code-fg: #24292f; --accent: #0b5cad;
+  --th-bg: #eef2f6; --btn-bg: #e7ecf1; --btn-fg: #333; --ok: #1a7f37;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9da7b1; --border: #30363d;
+    --code-bg: #161b22; --code-fg: #e6edf3; --accent: #58a6ff;
+    --th-bg: #1c2128; --btn-bg: #21262d; --btn-fg: #c9d1d9; --ok: #3fb950;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 2rem 1rem 4rem; background: var(--bg); color: var(--fg);
+  font: 16px/1.65 -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; }
+h1, h2, h3 { line-height: 1.25; scroll-margin-top: 1rem; }
+h1 { font-size: 1.9rem; border-bottom: 2px solid var(--border); padding-bottom: .5rem; }
+h2 { font-size: 1.45rem; margin-top: 2.4rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+h3 { font-size: 1.15rem; margin-top: 1.8rem; }
+a { color: var(--accent); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+blockquote {
+  margin: 1rem 0; padding: .5rem 1rem; border-left: 4px solid var(--accent);
+  background: var(--code-bg); color: var(--muted); border-radius: 0 6px 6px 0;
+}
+code {
+  font: 0.875em/1.5 ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+  background: var(--code-bg); color: var(--code-fg);
+  padding: .15em .4em; border-radius: 4px;
+}
+.codewrap { position: relative; margin: 1rem 0; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem; overflow-x: auto; margin: 0;
+}
+pre code { background: none; padding: 0; font-size: .85rem; display: block; }
+.copybtn {
+  position: absolute; top: .5rem; right: .5rem;
+  background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: .25rem .7rem; font-size: .78rem; cursor: pointer;
+}
+.copybtn:hover { border-color: var(--accent); color: var(--accent); }
+.copybtn.ok { color: var(--ok); border-color: var(--ok); }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: .45rem .7rem; text-align: left; }
+th { background: var(--th-bg); }
+tr:nth-child(even) td { background: color-mix(in srgb, var(--code-bg) 55%, var(--bg)); }
+li { margin: .25rem 0; }
+.footer { margin-top: 3rem; color: var(--muted); font-size: .85rem;
+  border-top: 1px solid var(--border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+<h1 id="commandes-entrainement-evaluation-et-visualisation">Commandes — entraînement, évaluation et visualisation</h1>
+<p>Toutes les commandes supposent le dépôt dans <code>~/Documents/transfer_learning</code>
+et l'environnement virtuel <code>.venv</code> à la racine. Les scripts <code>direct_method</code>
+se lancent depuis <code>robot-robot/</code>, les scripts BC depuis <code>database-robot/</code>.</p>
+<blockquote>
+<p><strong>Pressé ?</strong> Va directement à la <a href="#8-tout-en-une-seule-traite-copier-coller">section 8</a>
+pour copier-coller tous les blocs d'une traite.</p>
+</blockquote>
+<hr />
+<h2 id="0-preparation-une-fois-par-terminal">0. Préparation (une fois par terminal)</h2>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning
+source .venv/bin/activate
+</code></pre>
+<p>Si l'environnement n'existe pas encore (nouveau PC) :</p>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+</code></pre>
+<hr />
+<h2 id="1-auto-tests-aucun-entrainement-requis-10-s">1. Auto-tests (aucun entraînement requis, ~10 s)</h2>
+<p>Vérifient la cinématique (FK, Jacobiens, pseudo-inverse) et le baseline analytique.</p>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+python3 -m direct_method.kinematics
+python3 -m direct_method.action_mapper_baseline
+</code></pre>
+<hr />
+<h2 id="2-entrainement-des-mappers-510-min-chacun-cpu-ok-early-stopping">2. Entraînement des mappers (~5–10 min chacun, CPU ok, early stopping)</h2>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+
+# State mapper avec losses cinématiques  -&gt;  direct_method/runs/run_03_kin
+python3 -m direct_method.train_states_mapper
+
+# Action mapper conditionné (loss cartésienne)  -&gt;  direct_method/runs/run_04_cond
+python3 -m direct_method.train_actions_mapper
+</code></pre>
+<p>Smoke test rapide (5 époques, run jetable) :</p>
+<pre><code class="language-bash">DM_EPOCHS=5 DM_RUN_ID=essai python3 -m direct_method.train_states_mapper
+DM_EPOCHS=5 DM_RUN_ID=essai python3 -m direct_method.train_actions_mapper
+</code></pre>
+<hr />
+<h2 id="3-evaluation-offline-tableaux-par-zone-csv-histogrammes">3. Évaluation offline (tableaux par zone + CSV + histogrammes)</h2>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+python3 -m direct_method.eval_mappers
+</code></pre>
+<p>Sorties : console + <code>direct_method/runs/eval/metrics.csv</code> +
+<code>direct_method/runs/eval/alignment_histograms.png</code>.</p>
+<p>Variantes utiles :</p>
+<pre><code class="language-bash"># Évaluer seulement certains runs de state mapper
+python3 -m direct_method.eval_mappers --run-states run_03_kin
+python3 -m direct_method.eval_mappers --run-states run_01 run_03_kin   # comparaison ancien/nouveau
+</code></pre>
+<hr />
+<h2 id="4-visualisation-images-png-non-interactif-marche-partout">4. Visualisation — images PNG (non interactif, marche partout)</h2>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+
+# Erreurs angle/norme vs rayon, pour chaque mapper (le &quot;avant/après&quot; du symptôme)
+python3 -m direct_method.visualize_action_mapper --summary --mapper legacy      --direction 2to3
+python3 -m direct_method.visualize_action_mapper --summary --mapper jacobian    --direction 2to3
+python3 -m direct_method.visualize_action_mapper --summary --mapper conditioned --direction 2to3
+python3 -m direct_method.visualize_action_mapper --summary --mapper jacobian    --direction 3to2
+python3 -m direct_method.visualize_action_mapper --summary --mapper conditioned --direction 3to2
+
+# Une frame précise (bras + flèches v_src / v_pred), sauvegardée en PNG
+python3 -m direct_method.visualize_action_mapper --mapper jacobian --direction 2to3 --idx 1200 --save
+
+# State mapper : reconstruction d'un état (PNG dans runs/run_03_kin/plots/)
+MPLBACKEND=Agg python3 -m direct_method.visualize_velocity_mapper --idx 100 --save --run-id run_03_kin
+</code></pre>
+<p>Les PNG <code>--summary</code> et <code>--idx --save</code> de l'action mapper vont dans <code>direct_method/runs/eval/</code>.</p>
+<h2 id="5-visualisation-fenetres-interactives-necessite-un-ecran">5. Visualisation — fenêtres interactives (nécessite un écran)</h2>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+
+# Animation action mapper (fermer la fenêtre pour arrêter)
+python3 -m direct_method.visualize_action_mapper --mapper jacobian --direction 2to3 --delay 0.3
+
+# Une frame action mapper à l'écran
+python3 -m direct_method.visualize_action_mapper --mapper conditioned --idx 1200
+
+# Animation state mapper
+python3 -m direct_method.visualize_velocity_mapper --run-id run_03_kin --delay 0.3
+
+# Une frame state mapper à l'écran
+python3 -m direct_method.visualize_velocity_mapper --run-id run_03_kin --idx 100
+</code></pre>
+<hr />
+<h2 id="6-transfert-push-ball-necessite-le-ppo-2dof-avec-son-vec_normalizepkl">6. Transfert push-ball (nécessite le PPO 2DoF avec son vec_normalize.pkl)</h2>
+<p>Sur ce PC, <code>data/models/ppo_pushball_2dof_2/</code> n'a <strong>pas</strong> de <code>vec_normalize.pkl</code> :
+il faut d'abord ré-entraîner le PPO. Le script est configuré en <strong>budget de
+test : 15 M de timesteps</strong> (au lieu de 150 M), 8 envs parallèles, LR en
+décroissance linéaire ; il écrit dans <code>ppo_pushball_2dof_3</code> (sans écraser
+l'ancien run) :</p>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+python3 -m agents.train.train_pushball_2dof
+</code></pre>
+<p>Puis comparer les trois mappers sur les mêmes seeds (adapter les chemins au run PPO produit) :</p>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/robot-robot
+PPO_DIR=data/models/ppo_pushball_2dof_3   # &lt;- adapter si besoin
+
+python3 -m direct_method.transfer_pushball_3to2dof --mapper legacy      --episodes 100 --seed 0 \
+    --model-path $PPO_DIR/best_model.zip --vecnorm-path $PPO_DIR/vec_normalize.pkl
+python3 -m direct_method.transfer_pushball_3to2dof --mapper jacobian    --episodes 100 --seed 0 \
+    --model-path $PPO_DIR/best_model.zip --vecnorm-path $PPO_DIR/vec_normalize.pkl
+python3 -m direct_method.transfer_pushball_3to2dof --mapper conditioned --episodes 100 --seed 0 \
+    --model-path $PPO_DIR/best_model.zip --vecnorm-path $PPO_DIR/vec_normalize.pkl
+</code></pre>
+<p>Avec rendu graphique : ajouter <code>--render</code> (et réduire <code>--episodes</code>).</p>
+<hr />
+<h2 id="7-behavior-cloning-database-robot">7. Behavior cloning (database-robot)</h2>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning/database-robot
+
+# Version standard (MSE, best model choisi sur la validation)
+python3 train/train_bc.py \
+    --demos database/pushball_2dof/demonstrations.pkl \
+    --vecnorm database/models/ppo_pushball_2dof_1/vec_normalize.pkl \
+    --out data/models/bc_pushball_unified \
+    --epochs 500
+
+# Variante NLL (apprend aussi l'écart-type de la politique)
+python3 train/train_bc.py --loss nll --out data/models/bc_pushball_unified_nll
+
+# Smoke test rapide
+python3 train/train_bc.py --epochs 5 --out /tmp/bc_smoke
+</code></pre>
+<p>Suivi TensorBoard :</p>
+<pre><code class="language-bash">tensorboard --logdir ~/Documents/transfer_learning/database-robot/data/models/bc_pushball_unified/tensorboard
+</code></pre>
+<hr />
+<h2 id="8-tout-en-une-seule-traite-copier-coller">8. Tout en une seule traite (copier-coller)</h2>
+<h3 id="bloc-a-pipeline-mappers-complet-auto-tests-entrainements-eval-tous-les-png">Bloc A — pipeline mappers complet : auto-tests + entraînements + éval + tous les PNG</h3>
+<p>À coller tel quel dans le terminal (s'arrête à la première erreur grâce aux <code>&amp;&amp;</code>) :</p>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning &amp;&amp; \
+source .venv/bin/activate &amp;&amp; \
+cd robot-robot &amp;&amp; \
+python3 -m direct_method.kinematics &amp;&amp; \
+python3 -m direct_method.action_mapper_baseline &amp;&amp; \
+python3 -m direct_method.train_states_mapper &amp;&amp; \
+python3 -m direct_method.train_actions_mapper &amp;&amp; \
+python3 -m direct_method.eval_mappers &amp;&amp; \
+python3 -m direct_method.visualize_action_mapper --summary --mapper legacy      --direction 2to3 &amp;&amp; \
+python3 -m direct_method.visualize_action_mapper --summary --mapper jacobian    --direction 2to3 &amp;&amp; \
+python3 -m direct_method.visualize_action_mapper --summary --mapper conditioned --direction 2to3 &amp;&amp; \
+python3 -m direct_method.visualize_action_mapper --summary --mapper jacobian    --direction 3to2 &amp;&amp; \
+python3 -m direct_method.visualize_action_mapper --summary --mapper conditioned --direction 3to2 &amp;&amp; \
+python3 -m direct_method.visualize_action_mapper --mapper jacobian --direction 2to3 --idx 1200 --save &amp;&amp; \
+MPLBACKEND=Agg python3 -m direct_method.visualize_velocity_mapper --idx 100 --save --run-id run_03_kin &amp;&amp; \
+echo &quot;=== PIPELINE MAPPERS TERMINÉ — résultats dans direct_method/runs/ ===&quot;
+</code></pre>
+<h3 id="bloc-b-behavior-cloning-mse-puis-nll">Bloc B — behavior cloning (MSE puis NLL)</h3>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning &amp;&amp; \
+source .venv/bin/activate &amp;&amp; \
+cd database-robot &amp;&amp; \
+python3 train/train_bc.py \
+    --demos database/pushball_2dof/demonstrations.pkl \
+    --vecnorm database/models/ppo_pushball_2dof_1/vec_normalize.pkl \
+    --out data/models/bc_pushball_unified --epochs 500 &amp;&amp; \
+python3 train/train_bc.py \
+    --demos database/pushball_2dof/demonstrations.pkl \
+    --vecnorm database/models/ppo_pushball_2dof_1/vec_normalize.pkl \
+    --out data/models/bc_pushball_unified_nll --loss nll --epochs 500 &amp;&amp; \
+echo &quot;=== BC TERMINÉ — modèles dans data/models/bc_pushball_unified*/ ===&quot;
+</code></pre>
+<h3 id="bloc-c-ppo-push-ball-2dof-budget-test-15-m-comparaison-de-transfert">Bloc C — PPO push-ball 2DoF (budget test 15 M) + comparaison de transfert</h3>
+<pre><code class="language-bash">cd ~/Documents/transfer_learning &amp;&amp; \
+source .venv/bin/activate &amp;&amp; \
+cd robot-robot &amp;&amp; \
+python3 -m agents.train.train_pushball_2dof &amp;&amp; \
+PPO_DIR=data/models/ppo_pushball_2dof_3 &amp;&amp; \
+python3 -m direct_method.transfer_pushball_3to2dof --mapper legacy      --episodes 100 --seed 0 \
+    --model-path $PPO_DIR/best_model.zip --vecnorm-path $PPO_DIR/vec_normalize.pkl &amp;&amp; \
+python3 -m direct_method.transfer_pushball_3to2dof --mapper jacobian    --episodes 100 --seed 0 \
+    --model-path $PPO_DIR/best_model.zip --vecnorm-path $PPO_DIR/vec_normalize.pkl &amp;&amp; \
+python3 -m direct_method.transfer_pushball_3to2dof --mapper conditioned --episodes 100 --seed 0 \
+    --model-path $PPO_DIR/best_model.zip --vecnorm-path $PPO_DIR/vec_normalize.pkl &amp;&amp; \
+echo &quot;=== TRANSFERT TERMINÉ ===&quot;
+</code></pre>
+<blockquote>
+<p>Note bloc C : le script PPO est en <strong>budget de test (15 M timesteps)</strong> et
+écrit dans <code>ppo_pushball_2dof_3</code>. Le <code>vec_normalize.pkl</code> doit être présent à
+côté de <code>best_model.zip</code> à la fin. Pour un run complet, remettre
+<code>TOTAL_TIMESTEPS = 150_000_000</code> dans <code>agents/train/train_pushball_2dof.py</code>
+(et incrémenter <code>run_id</code>).</p>
+</blockquote>
+<hr />
+<h2 id="ou-trouver-les-resultats">Où trouver les résultats</h2>
+<table>
+<thead>
+<tr>
+<th>Sortie</th>
+<th>Emplacement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Modèles state mapper</td>
+<td><code>robot-robot/direct_method/runs/run_03_kin/models/</code></td>
+</tr>
+<tr>
+<td>Modèles action mapper</td>
+<td><code>robot-robot/direct_method/runs/run_04_cond/models/</code></td>
+</tr>
+<tr>
+<td>Courbes d'entraînement</td>
+<td><code>robot-robot/direct_method/runs/run_0*/plots/loss_curves.png</code></td>
+</tr>
+<tr>
+<td>Logs CSV (par composante de loss)</td>
+<td><code>robot-robot/direct_method/runs/run_0*/logs/training_log.csv</code></td>
+</tr>
+<tr>
+<td>Métriques d'évaluation</td>
+<td><code>robot-robot/direct_method/runs/eval/metrics.csv</code></td>
+</tr>
+<tr>
+<td>Graphiques avant/après symptôme</td>
+<td><code>robot-robot/direct_method/runs/eval/action_mapper_*_summary.png</code></td>
+</tr>
+<tr>
+<td>Modèles BC</td>
+<td><code>database-robot/data/models/bc_pushball_unified*/best_model.zip</code></td>
+</tr>
+</tbody>
+</table>
+<p class="footer">Généré depuis <code>COMMANDES.md</code> — 2026-07-06.
+Document compagnon : <a href="CHANGEMENTS_ET_RAISONNEMENT.html">CHANGEMENTS_ET_RAISONNEMENT.html</a>.</p>
+</main>
+<script>
+document.querySelectorAll("pre").forEach(function (pre) {
+  var wrap = document.createElement("div");
+  wrap.className = "codewrap";
+  pre.parentNode.insertBefore(wrap, pre);
+  wrap.appendChild(pre);
+  var btn = document.createElement("button");
+  btn.className = "copybtn";
+  btn.textContent = "Copier";
+  btn.addEventListener("click", function () {
+    navigator.clipboard.writeText(pre.innerText).then(function () {
+      btn.textContent = "Copié ✓"; btn.classList.add("ok");
+      setTimeout(function () { btn.textContent = "Copier"; btn.classList.remove("ok"); }, 2000);
+    });
+  });
+  wrap.appendChild(btn);
+});
+</script>
+</body>
+</html>

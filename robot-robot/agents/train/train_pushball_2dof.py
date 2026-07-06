@@ -21,13 +21,13 @@ if __name__ == "__main__":
     # Hyperparamètres
     # ==============================
     total_batch = 16384
-    n_envs = 4      #64
-    TOTAL_TIMESTEPS = 150_000_000
+    n_envs = 8      # 20 cœurs dispo ; rollout = n_steps * n_envs = total_batch
+    TOTAL_TIMESTEPS = 15_000_000   # budget de test (150M pour un run complet)
 
     # ==============================
     # Directories
     # ==============================
-    run_id = 2
+    run_id = 3     # _2 = ancien run incomplet (sans vec_normalize.pkl), ne pas écraser
     run_name = f"ppo_pushball_2dof_{run_id}"
     tensorboard_log_dir = f"./data/models/{run_name}/"
     model_dir = f"./data/models/{run_name}/"
@@ -156,10 +156,8 @@ if __name__ == "__main__":
         # PPO
         # ==============================
 
-        n_steps = 2048
+        n_steps = total_batch // n_envs   # 2048 : rollout total inchangé (16384)
         batch_size = 1024
-
-
 
         model = PPO(
             "MlpPolicy",
@@ -169,7 +167,9 @@ if __name__ == "__main__":
             batch_size= batch_size,
             n_epochs=5,
             # --- optimisation ---
-            learning_rate= 3e-4, 
+            # décroissance linéaire : sur un petit budget, le LR final réduit
+            # aide la politique à se stabiliser avant la fin du run
+            learning_rate= linear_schedule(3e-4),
             gamma=0.99,
             gae_lambda=0.95,
             # --- stabilisation ---

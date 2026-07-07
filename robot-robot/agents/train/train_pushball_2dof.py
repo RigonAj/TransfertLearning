@@ -22,12 +22,12 @@ if __name__ == "__main__":
     # ==============================
     total_batch = 16384
     n_envs = 8      # 20 cœurs dispo ; rollout = n_steps * n_envs = total_batch
-    TOTAL_TIMESTEPS = 15_000_000   # budget de test (150M pour un run complet)
+    TOTAL_TIMESTEPS = 40_000_000   # _3 (15M) plafonnait à 72 % de réussite en éval native
 
     # ==============================
     # Directories
     # ==============================
-    run_id = 3     # _2 = ancien run incomplet (sans vec_normalize.pkl), ne pas écraser
+    run_id = 4     # _2 = incomplet (sans vec_normalize.pkl), _3 = budget test 15M ; ne pas écraser
     run_name = f"ppo_pushball_2dof_{run_id}"
     tensorboard_log_dir = f"./data/models/{run_name}/"
     model_dir = f"./data/models/{run_name}/"

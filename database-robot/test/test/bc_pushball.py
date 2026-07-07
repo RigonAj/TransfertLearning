@@ -1,7 +1,11 @@
 import argparse
+import sys
 
 import numpy as np
 from pathlib import Path
+
+# Rend `envs` importable quel que soit le répertoire de lancement (comme train_bc.py)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
@@ -13,21 +17,32 @@ MODEL_ROOT = ROOT / "data" / "models"
 # run_id passé en argument au lancement du script pour choisir le modèle à tester
 parser = argparse.ArgumentParser(description="Test BC model on push-ball 2-dof environment")
 parser.add_argument("--run_id", type=int, default=1, help="Run ID of the BC model to test")
+parser.add_argument("--model-dir", default=None,
+                    help="dossier du modèle (ex: data/models/bc_pushball_dagger) ; "
+                         "prioritaire sur --run_id")
+parser.add_argument("--episodes", type=int, default=2000)
+parser.add_argument("--max-steps", type=int, default=150)
 args = parser.parse_args()
 
 # --- Configuration ---
-run_id = args.run_id
-MODEL_PATH  = MODEL_ROOT / f"bc_pushball_{run_id}" / "best_model.zip"
-VECNORM_PATH = MODEL_ROOT / f"bc_pushball_{run_id}" / "vec_normalize.pkl"
-NUM_EPISODES = 2000
-MAX_STEPS    = 150
+if args.model_dir is not None:
+    model_dir = Path(args.model_dir)
+    if not model_dir.is_absolute():
+        model_dir = ROOT / model_dir
+else:
+    model_dir = MODEL_ROOT / f"bc_pushball_{args.run_id}"
+MODEL_PATH  = model_dir / "best_model.zip"
+VECNORM_PATH = model_dir / "vec_normalize.pkl"
+NUM_EPISODES = args.episodes
+MAX_STEPS    = args.max_steps
 
 # --- Charger le modèle ---
 model = PPO.load(MODEL_PATH, custom_objects={"learning_rate": 0.0003, "lr_schedule": lambda _: 0.0003, "clip_range": lambda _: 0.2})
 
 # --- Créer l'environnement AVEC VecNormalize (indispensable !) ---
 def make_env():
-    return Monitor(PushBallEnv_2dof(render_mode=None))
+    # MAX_STEPS doit être transmis à l'env (avant : il restait au défaut 100)
+    return Monitor(PushBallEnv_2dof(render_mode=None, max_steps=MAX_STEPS))
 
 env = DummyVecEnv([make_env])
 env = VecNormalize.load(VECNORM_PATH, env)

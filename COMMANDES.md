@@ -207,21 +207,57 @@ MPLBACKEND=Agg python3 -m direct_method.visualize_transfer --episodes 5 --save
 
 ## 7. Behavior cloning (database-robot)
 
+Depuis le 2026-07-07 (voir `AMELIORATIONS_BC_2026-07-07.md`), `train_bc.py`
+utilise un réseau 256×256 (même capacité que l'expert) et propose DAgger.
+Référence mesurée : BC pur 64×64 = 36,5 % → BC 256×256 = 85 % →
+**BC + DAgger = 91,2 %** (500 épisodes indépendants ; expert = 96,5 %).
+
 ```bash
 cd ~/Documents/transfer_learning/database-robot
 
-# Version standard (MSE, best model choisi sur la validation)
-python3 train/train_bc.py \
-    --demos database/pushball_2dof/demonstrations.pkl \
-    --vecnorm database/models/ppo_pushball_2dof_1/vec_normalize.pkl \
-    --out data/models/bc_pushball_unified \
-    --epochs 500
+# Config recommandée : BC 256×256 + 10 itérations DAgger (~10 min CPU)
+python3 train/train_bc.py --out data/models/bc_pushball_dagger --dagger-iters 10
+
+# Validation indépendante (500 épisodes) — attendu ~91 %
+python3 test/test/bc_pushball.py --model-dir data/models/bc_pushball_dagger --episodes 500
+
+# Référence expert (source des démos) — attendu ~96 %
+python3 test/test/bc_pushball.py --model-dir database/models/ppo_pushball_2dof_1 --episodes 500
+
+# BC pur sans DAgger (MSE, best model choisi sur la loss de validation)
+python3 train/train_bc.py --out data/models/bc_pushball_unified_v2 --epochs 500
 
 # Variante NLL (apprend aussi l'écart-type de la politique)
-python3 train/train_bc.py --loss nll --out data/models/bc_pushball_unified_nll
+python3 train/train_bc.py --loss nll --out data/models/bc_pushball_unified_nll_v2
 
 # Smoke test rapide
-python3 train/train_bc.py --epochs 5 --out /tmp/bc_smoke
+python3 train/train_bc.py --epochs 5 --dagger-iters 1 --dagger-episodes 3 \
+    --eval-episodes 10 --out /tmp/bc_smoke
+```
+
+### Visualisation BC
+
+```bash
+cd ~/Documents/transfer_learning/database-robot
+
+# Rollout en direct de la politique clonée (bras, balle, cible, flèche v_eff, légende)
+python3 test/visualize/visualize_bc_pushball.py --episodes 3
+
+# Superposer l'action que l'EXPERT aurait prise sur les mêmes états
+# (l'écart d'angle entre les deux flèches est affiché dans la légende)
+python3 test/visualize/visualize_bc_pushball.py --episodes 3 --compare-expert
+
+# Visualiser un autre modèle (ancien BC 64x64, expert…)
+python3 test/visualize/visualize_bc_pushball.py --model-dir data/models/bc_pushball_unified
+python3 test/visualize/visualize_bc_pushball.py --model-dir database/models/ppo_pushball_2dof_1
+
+# GIF par épisode, sans écran -> data/plots/bc_rollouts/
+MPLBACKEND=Agg python3 test/visualize/visualize_bc_pushball.py --episodes 5 --save --compare-expert
+
+# Courbes d'entraînement : loss BC + succès par itération DAgger vs expert
+# -> <model-dir>/plots/training_summary.png
+python3 test/visualize/plot_bc_training.py
+python3 test/visualize/plot_bc_training.py --model-dir data/models/bc_pushball_dagger --save-only
 ```
 
 Suivi TensorBoard :
@@ -257,21 +293,16 @@ MPLBACKEND=Agg python3 -m direct_method.visualize_velocity_mapper --idx 100 --sa
 echo "=== PIPELINE MAPPERS TERMINÉ — résultats dans direct_method/runs/ ==="
 ```
 
-### Bloc B — behavior cloning (MSE puis NLL)
+### Bloc B — behavior cloning + DAgger, puis validation (~15 min)
 
 ```bash
 cd ~/Documents/transfer_learning && \
 source .venv/bin/activate && \
 cd database-robot && \
-python3 train/train_bc.py \
-    --demos database/pushball_2dof/demonstrations.pkl \
-    --vecnorm database/models/ppo_pushball_2dof_1/vec_normalize.pkl \
-    --out data/models/bc_pushball_unified --epochs 500 && \
-python3 train/train_bc.py \
-    --demos database/pushball_2dof/demonstrations.pkl \
-    --vecnorm database/models/ppo_pushball_2dof_1/vec_normalize.pkl \
-    --out data/models/bc_pushball_unified_nll --loss nll --epochs 500 && \
-echo "=== BC TERMINÉ — modèles dans data/models/bc_pushball_unified*/ ==="
+python3 train/train_bc.py --out data/models/bc_pushball_dagger --dagger-iters 10 && \
+python3 test/test/bc_pushball.py --model-dir data/models/bc_pushball_dagger --episodes 500 && \
+python3 test/test/bc_pushball.py --model-dir database/models/ppo_pushball_2dof_1 --episodes 500 && \
+echo "=== BC TERMINÉ — attendu : ~91 % (DAgger) contre ~96 % (expert) ==="
 ```
 
 ### Bloc C — vérification complète du transfert (PPO 40 M déjà entraîné, ~15 min)
@@ -329,4 +360,5 @@ echo "=== PPO TERMINÉ — évaluer ppo_pushball_final.zip (pas best_model) avec
 | Graphiques avant/après symptôme | `robot-robot/direct_method/runs/eval/action_mapper_*_summary.png` |
 | GIF de visualisation du transfert | `robot-robot/direct_method/runs/eval/transfer_gifs/` |
 | PPO 2DoF de référence (40 M) | `robot-robot/data/models/ppo_pushball_2dof_4/ppo_pushball_final.zip` |
-| Modèles BC | `database-robot/data/models/bc_pushball_unified*/best_model.zip` |
+| Modèle BC de référence (DAgger, 91 %) | `database-robot/data/models/bc_pushball_dagger/best_model.zip` |
+| Anciens modèles BC (64×64, 36–52 %) | `database-robot/data/models/bc_pushball_unified*/best_model.zip` |
